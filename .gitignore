@@ -36,3 +36,6 @@ Thumbs.db
 *.sln
 *.sw?
 .idea/
+
+# ===== Backend =====
+backend/node_modules/

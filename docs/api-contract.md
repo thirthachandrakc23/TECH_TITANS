@@ -1,7 +1,11 @@
 # DigitalVision Service Layer Contract
 
+> [!CAUTION]
+> **SUPERSEDED:** This document has been replaced by [`docs/CONTRACT.md`](./CONTRACT.md) as the single source of truth for all module interfaces, API contracts, and event specifications. This file is kept for historical reference only.
+
 > [!IMPORTANT]
 > **DRAFT: Not implemented. This document proposes conventions for the future service layer. The Team Lead must finalize it before Stage 2 begins.**
+
 
 ---
 

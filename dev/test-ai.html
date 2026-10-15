@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DigitalVision — AI Module Test</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #1a1a1a; color: #e8e8e8; }
+    h1 { font-size: 1.5rem; }
+    h2 { font-size: 1.1rem; margin-top: 1.5rem; }
+    button { padding: 0.5rem 1rem; margin: 0.25rem; border: 1px solid #555; background: #2a2a2a; color: #e8e8e8; border-radius: 4px; cursor: pointer; font-size: 0.9rem; }
+    button:hover { background: #3a3a3a; }
+    input, textarea { padding: 0.5rem; border: 1px solid #555; background: #2a2a2a; color: #e8e8e8; border-radius: 4px; font-size: 0.9rem; width: 100%; margin: 0.25rem 0; font-family: inherit; }
+    .log { background: #111; border: 1px solid #333; border-radius: 4px; padding: 1rem; margin-top: 1rem; font-family: monospace; font-size: 0.85rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; }
+    .result { background: #1a2a1a; border: 1px solid #2a4a2a; border-radius: 4px; padding: 1rem; margin-top: 0.5rem; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
+    .status { padding: 0.5rem; margin: 0.5rem 0; border-radius: 4px; font-weight: 600; }
+    .status.ok { background: #1a3a1a; color: #4caf50; }
+    .status.error { background: #3a1a1a; color: #f44336; }
+    .status.info { background: #1a2a3a; color: #42a5f5; }
+    label { display: block; margin-top: 0.5rem; font-weight: 600; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>🤖 AI Module Test</h1>
+  <p>Owner: Member 3 — Test intent classification and vision analysis via backend API.</p>
+  <p><strong>Prerequisite:</strong> Backend must be running at <code>http://localhost:3001</code>. Run <code>cd backend && npm start</code>.</p>
+  <div class="status info" id="status">Status: Not tested</div>
+
+  <button onclick="testHealth()">Test Health Endpoint</button>
+
+  <h2>Intent Classification</h2>
+  <label for="intent-text">Command text:</label>
+  <input type="text" id="intent-text" placeholder="e.g. What is in front of me?" value="What is in front of me?" />
+  <label for="intent-lang">Language:</label>
+  <input type="text" id="intent-lang" value="en-IN" />
+  <button onclick="testIntent()">Send to /api/intent</button>
+  <div class="result" id="intent-result">Result will appear here</div>
+
+  <h2>Vision Analysis</h2>
+  <label for="vision-file">Select image:</label>
+  <input type="file" id="vision-file" accept="image/*" />
+  <label for="vision-intent">Intent:</label>
+  <input type="text" id="vision-intent" value="DESCRIBE_SURROUNDINGS" />
+  <button onclick="testVision()">Send to /api/vision</button>
+  <div class="result" id="vision-result">Result will appear here</div>
+
+  <h2>Log</h2>
+  <div class="log" id="log"></div>
+
+  <script>
+    const API_BASE = 'http://localhost:3001/api';
+
+    function log(msg) {
+      const el = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      el.textContent += `[${time}] ${msg}\n`;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function setStatus(text, type) {
+      const el = document.getElementById('status');
+      el.textContent = 'Status: ' + text;
+      el.className = 'status ' + type;
+    }
+
+    async function testHealth() {
+      try {
+        log('Testing GET /api/health...');
+        const res = await fetch(API_BASE + '/health');
+        const data = await res.json();
+        log('Response: ' + JSON.stringify(data, null, 2));
+        setStatus('Backend reachable', 'ok');
+      } catch (err) {
+        log('ERROR: ' + err.message);
+        setStatus('Backend unreachable — is it running?', 'error');
+      }
+    }
+
+    async function testIntent() {
+      const text = document.getElementById('intent-text').value;
+      const lang = document.getElementById('intent-lang').value;
+      const resultEl = document.getElementById('intent-result');
+      try {
+        log('POST /api/intent: ' + JSON.stringify({ text, lang }));
+        const res = await fetch(API_BASE + '/intent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text, lang }),
+        });
+        const data = await res.json();
+        resultEl.textContent = JSON.stringify(data, null, 2);
+        log('Response (' + res.status + '): ' + JSON.stringify(data));
+        setStatus('Intent response received (' + res.status + ')', res.ok ? 'ok' : 'error');
+      } catch (err) {
+        resultEl.textContent = 'Error: ' + err.message;
+        log('ERROR: ' + err.message);
+        setStatus('Request failed', 'error');
+      }
+    }
+
+    async function testVision() {
+      const fileInput = document.getElementById('vision-file');
+      const intent = document.getElementById('vision-intent').value;
+      const resultEl = document.getElementById('vision-result');
+
+      if (!fileInput.files.length) {
+        log('ERROR: No image selected.');
+        resultEl.textContent = 'Please select an image first.';
+        return;
+      }
+
+      try {
+        const file = fileInput.files[0];
+        log('Reading image: ' + file.name + ' (' + Math.round(file.size / 1024) + ' KB)');
+        const reader = new FileReader();
+        const base64 = await new Promise((resolve, reject) => {
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        const payload = {
+          imageBase64: base64,
+          intent: intent,
+          params: {},
+          lang: document.getElementById('intent-lang').value,
+        };
+
+        log('POST /api/vision (image size: ' + Math.round(base64.length / 1024) + ' KB base64)');
+        const res = await fetch(API_BASE + '/vision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        resultEl.textContent = JSON.stringify(data, null, 2);
+        log('Response (' + res.status + '): ' + JSON.stringify(data));
+        setStatus('Vision response received (' + res.status + ')', res.ok ? 'ok' : 'error');
+      } catch (err) {
+        resultEl.textContent = 'Error: ' + err.message;
+        log('ERROR: ' + err.message);
+        setStatus('Request failed', 'error');
+      }
+    }
+
+    log('AI test page loaded. Ensure backend is running on port 3001.');
+  </script>
+</body>
+</html>
