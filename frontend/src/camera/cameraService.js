@@ -1,81 +1,58 @@
 /**
- * DigitalVision — Camera Service (STUB)
+ * DigitalVision — Camera Service
  *
  * Owner: Member 2
- * See docs/CONTRACT.md §3.2 for the full interface contract.
+ * See docs/CONTRACT.md §3.2 for the interface specification.
  *
- * This file provides the agreed function signatures with JSDoc.
- * Member 2 replaces the stub bodies with real implementations.
+ * Unifies camera lifecycle, frame capture, periodic monitoring, and hazard vibration.
  */
 
-import { bus } from '../core/eventBus.js';
-import { APP_ERROR } from '../core/events.js';
+import {
+  startCamera as baseStartCamera,
+  stopCamera as baseStopCamera,
+  isCameraActive,
+  captureFrame,
+  getVideoStream,
+  getVideoElement,
+} from './camera.js';
+
+import {
+  startMonitoring,
+  stopMonitoring,
+  isMonitoringActive,
+  vibrateForHazard,
+} from './monitor.js';
 
 /**
  * Request camera access and start the video stream.
+ * Prefers the rear camera ('environment') at ~1280x720 when available,
+ * falling back gracefully to any available camera.
+ *
  * @param {Object} [options]
- * @param {string} [options.facingMode='environment'] - Camera facing mode.
- * @param {number} [options.width=640] - Preferred width.
- * @param {number} [options.height=480] - Preferred height.
- * @returns {Promise<MediaStream|null>} The camera stream, or null on failure.
+ * @param {string} [options.facingMode='environment'] - Camera facing mode ('environment' | 'user').
+ * @param {number} [options.width=1280] - Preferred width.
+ * @param {number} [options.height=720] - Preferred height.
+ * @returns {Promise<boolean>} True if camera started successfully, false on expected failure.
  */
-export async function startCamera(_options = {}) {
-  bus.emit(APP_ERROR, {
-    source: 'camera',
-    message: 'startCamera() not implemented yet.',
-    recoverable: true,
-  });
-  return null;
+export async function startCamera(options = {}) {
+  return baseStartCamera(options);
 }
 
 /**
- * Stop the camera and release all resources.
+ * Stop the camera stream, release all media tracks, and halt active monitoring.
  * @returns {void}
  */
 export function stopCamera() {
-  // TODO: Member 2 — stop tracks, release stream
+  baseStopCamera();
 }
 
-/**
- * Check whether the camera is currently streaming.
- * @returns {boolean}
- */
-export function isCameraActive() {
-  return false;
-}
-
-/**
- * Capture the current video frame as a base64 JPEG data URL.
- * @returns {string|null} Base64 data URL, or null if camera is not active.
- */
-export function captureFrame() {
-  return null;
-}
-
-/**
- * Start periodic frame capture for monitoring mode.
- * Should skip a capture if the previous onFrame callback is still running.
- * @param {(base64: string) => Promise<void>} onFrame - Async callback for each frame.
- * @param {number} [intervalMs=3000] - Milliseconds between captures.
- * @returns {void}
- */
-export function startMonitoring(_onFrame, _intervalMs = 3000) {
-  // TODO: Member 2 — setInterval, skip if previous still running
-}
-
-/**
- * Stop periodic frame capture.
- * @returns {void}
- */
-export function stopMonitoring() {
-  // TODO: Member 2 — clearInterval
-}
-
-/**
- * Trigger device vibration based on hazard level.
- * @param {'none'|'caution'|'danger'} hazard
- * @returns {void}
- */
-export function vibrateForHazard(_hazard) {
-  // TODO: Member 2 — navigator.vibrate with pattern based on hazard
-}
+export {
+  isCameraActive,
+  captureFrame,
+  getVideoStream,
+  getVideoElement,
+  startMonitoring,
+  stopMonitoring,
+  isMonitoringActive,
+  vibrateForHazard,
+};
