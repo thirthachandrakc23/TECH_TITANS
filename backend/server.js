@@ -24,12 +24,26 @@ import {
 import { interpretCommand } from './services/intentService.js';
 import { analyzeImage } from './services/visionService.js';
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const app = express();
 
 // --------------- Middleware ---------------
 
 app.use(cors());
 app.use(express.json({ limit: MAX_BODY_LIMIT }));
+
+// Serve dev test pages statically (e.g. /test-ai.html)
+app.use(express.static(path.join(__dirname, '../dev')));
+
+// Root redirect to AI test page
+app.get('/', (req, res) => {
+  res.redirect('/test-ai.html');
+});
 
 // Configurable request timeout middleware (~15 seconds)
 app.use((req, res, next) => {
@@ -142,9 +156,6 @@ app.use((err, req, res, next) => {
 });
 
 // --------------- Start ---------------
-
-import { fileURLToPath } from 'url';
-import path from 'path';
 
 const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 
