@@ -436,6 +436,15 @@ footer.app-footer {
   align-items: center;
   justify-content: center;
   box-shadow: var(--shadow-card);
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  outline: none;
+}
+
+.camera-card:hover,
+.camera-card:focus-visible {
+  border-color: var(--color-danger);
+  box-shadow: 0 0 25px rgba(255, 23, 68, 0.35);
 }
 
 .camera-video {
@@ -916,5 +925,57 @@ footer.app-footer {
   line-height: 1.45;
   font-weight: 500;
 }
+
+/* ===== Camera Active View & Tap Anywhere to Stop ===== */
+.camera-active-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+  width: 100%;
+  cursor: pointer;
+}
+
+.tap-to-stop-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: rgba(255, 23, 68, 0.12);
+  border: 1px dashed var(--color-danger);
+  color: #ff80ab;
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius-md);
+  text-align: center;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.camera-active-container:hover .tap-to-stop-banner {
+  background: rgba(255, 23, 68, 0.22);
+  color: #ffffff;
+  box-shadow: 0 0 15px rgba(255, 23, 68, 0.25);
+}
+
+.camera-tap-hint {
+  position: absolute;
+  bottom: var(--spacing-sm);
+  right: var(--spacing-sm);
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.8rem;
+  background: rgba(11, 15, 25, 0.88);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--color-danger);
+  color: #ff80ab;
+  border-radius: var(--radius-full);
+  font-size: 0.85rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
 
 

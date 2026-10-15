@@ -542,7 +542,7 @@ export default function HomePage() {
 
     setCameraActive(false);
     setDetectedObjects([]);
-    const stopMsg = 'Surroundings detection stopped. Camera deactivated.';
+    const stopMsg = 'Describing stopped. Tap anywhere on the screen to start again.';
     setLastSpoken(stopMsg);
     speak(stopMsg);
   };
@@ -743,7 +743,17 @@ export default function HomePage() {
             </div>
           </div>
         ) : (
-          <>
+          <div
+            className="camera-active-container"
+            onClick={handleStopCamera}
+            role="region"
+            aria-label="Active camera view. Tap anywhere on screen or camera feed to stop describing and return to the main interface."
+          >
+            {/* Tap Anywhere to Stop Banner */}
+            <div className="tap-to-stop-banner" aria-hidden="true">
+              <span>👆 Tap anywhere on screen to stop describing</span>
+            </div>
+
             {/* 5-Second Surroundings Scan Status & Progress Card */}
             <div
               className="scan-status-card"
@@ -806,10 +816,19 @@ export default function HomePage() {
               </div>
             </div>
 
-            {/* Live Camera Feed & Canvas Overlay */}
+            {/* Live Camera Feed & Canvas Overlay (Tappable to Stop) */}
             <div
               className="camera-card"
-              aria-label="Live camera feed showing detected surroundings"
+              role="button"
+              tabIndex={0}
+              onClick={handleStopCamera}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar' || e.key === 'Escape') {
+                  e.preventDefault();
+                  handleStopCamera();
+                }
+              }}
+              aria-label="Live camera feed. Tap here or anywhere on the screen to stop describing and return to the main interface."
             >
               <div className="camera-status-pill">
                 <span className="indicator-dot" aria-hidden="true"></span>
@@ -818,6 +837,10 @@ export default function HomePage() {
                     ? 'Loading AI Model...'
                     : `Live: ${facingMode === 'user' ? 'Front (Face)' : 'Rear (Surroundings)'} (${detectedObjects.length} in view)`}
                 </span>
+              </div>
+
+              <div className="camera-tap-hint" aria-hidden="true">
+                <span>👆 Tap to Stop</span>
               </div>
 
               <video
@@ -848,6 +871,7 @@ export default function HomePage() {
               className="controls-row"
               role="toolbar"
               aria-label="Surroundings Controls"
+              onClick={(e) => e.stopPropagation()}
             >
               {/* Primary 5-Second Scan Button */}
               <button
@@ -938,6 +962,7 @@ export default function HomePage() {
               <section
                 className="detections-panel"
                 aria-labelledby="detections-title"
+                onClick={(e) => e.stopPropagation()}
               >
                 <div className="detections-heading">
                   <h3 id="detections-title">Detected Objects & People in View</h3>
@@ -969,7 +994,7 @@ export default function HomePage() {
                 </div>
               </section>
             )}
-          </>
+          </div>
         )}
 
         {/* Live Spoken Caption Banner */}
