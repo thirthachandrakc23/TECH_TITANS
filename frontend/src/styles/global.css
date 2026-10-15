@@ -852,77 +852,77 @@ footer.app-footer {
   background: rgba(0, 230, 118, 0.12);
 }
 
-/* ===== Full-Screen Tap-to-Start Interface ===== */
+/* ===== Clean Rectangular Tap-to-Start Column ===== */
 .tap-to-start-screen {
   cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: var(--spacing-xl) var(--spacing-md);
+  width: 100%;
+  max-width: 580px;
+  min-height: 440px;
+  margin: 2rem auto;
+  padding: 3.5rem 2rem;
   border-radius: var(--radius-lg);
-  border: 2px dashed rgba(0, 229, 255, 0.45);
-  background: radial-gradient(circle at center, rgba(0, 229, 255, 0.08) 0%, rgba(19, 27, 46, 0.65) 100%);
-  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  border: 2px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+  transition: border-color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease, background-color 0.2s ease;
   outline: none;
-  min-height: 380px;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
+  text-align: center;
 }
 
 .tap-to-start-screen:hover {
   border-color: var(--color-primary);
-  background: radial-gradient(circle at center, rgba(0, 229, 255, 0.14) 0%, rgba(19, 27, 46, 0.8) 100%);
-  box-shadow: 0 0 35px rgba(0, 229, 255, 0.25);
+  background: var(--color-surface-elevated);
   transform: translateY(-2px);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55);
 }
 
 .tap-to-start-screen:focus-visible {
   border-color: #ffffff;
-  outline: 4px solid var(--color-primary);
+  outline: 3px solid var(--color-primary);
   outline-offset: 4px;
 }
 
 .tap-to-start-screen:active {
-  transform: scale(0.985);
-  background: rgba(0, 229, 255, 0.18);
+  transform: scale(0.99);
+  background: rgba(30, 41, 59, 0.95);
 }
 
 .tap-prompt-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  margin-top: 1.5rem;
+  gap: 1.25rem;
 }
 
-.tap-pulse-icon {
-  font-size: 3.2rem;
-  margin-bottom: 0.5rem;
-  animation: bounceTouch 1.8s infinite ease-in-out;
-  display: inline-block;
-}
-
-@keyframes bounceTouch {
-  0%, 100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-10px) scale(1.08);
-  }
+.tap-prompt-icon {
+  font-size: 3.8rem;
+  line-height: 1;
+  display: block;
+  user-select: none;
 }
 
 .tap-prompt-title {
-  font-size: 2rem;
-  font-weight: 900;
+  font-size: 2.25rem;
+  font-weight: 800;
   color: #ffffff;
-  margin-bottom: 0.5rem;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
+  margin: 0;
 }
 
 .tap-prompt-subtitle {
   font-size: 1.15rem;
-  color: var(--color-primary);
-  max-width: 30rem;
+  color: var(--color-text-secondary);
+  max-width: 26rem;
   margin: 0 auto;
-  line-height: 1.45;
+  line-height: 1.5;
   font-weight: 500;
 }
 

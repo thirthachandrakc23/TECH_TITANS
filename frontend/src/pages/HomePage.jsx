@@ -13,7 +13,6 @@ import {
   startCamera,
   stopCamera,
   getVideoStream,
-  captureFrame,
 } from '../camera/cameraService.js';
 import {
   loadDetectionModel,
@@ -23,13 +22,10 @@ import {
 import {
   speak,
   stopSpeaking,
-  setVoiceMuted,
-  getVoiceMuted,
   playAudioCue,
   triggerHaptic,
   formatAggregatedScanDescription,
 } from '../services/speechService.js';
-import { analyzeImage } from '../ai/vision.js';
 
 const WELCOME_SPEECH =
   'Welcome to DigitalVision. Tap anywhere on your screen to activate the camera and understand your surroundings.';
@@ -38,23 +34,19 @@ export default function HomePage() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState(null);
-  const [facingMode, setFacingMode] = useState('user'); // Default to front camera so face shows on webcams/phones
+  const [facingMode, setFacingMode] = useState('user'); // Default to front camera
 
   const [modelLoading, setModelLoading] = useState(() => !isModelReady());
-  const [modelReady, setModelReady] = useState(isModelReady());
   const [modelError, setModelError] = useState(null);
 
   const [detectedObjects, setDetectedObjects] = useState([]);
   const [lastSpoken, setLastSpoken] = useState(
     'Tap anywhere on the screen to activate the camera and understand your surroundings.'
   );
-  const [voiceMuted, setVoiceMutedState] = useState(getVoiceMuted());
-  const [isAnalyzingAi, setIsAnalyzingAi] = useState(false);
-
   // 5-Second Surroundings Scan Engine State
   const [scanPhase, setScanPhase] = useState('idle'); // 'idle' | 'scanning' | 'speaking' | 'paused' | 'ready'
   const [scanCountdown, setScanCountdown] = useState(5);
-  const [autoScanEnabled, setAutoScanEnabled] = useState(true);
+  const [autoScanEnabled, _setAutoScanEnabled] = useState(true);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
@@ -125,7 +117,6 @@ export default function HomePage() {
         .then(() => {
           if (!isCancelled) {
             setModelLoading(false);
-            setModelReady(true);
           }
         })
         .catch((err) => {
@@ -421,7 +412,6 @@ export default function HomePage() {
         speak('Camera active. Loading AI detection model.');
         await loadDetectionModel();
         setModelLoading(false);
-        setModelReady(true);
         await speak('AI detection ready. Starting 5-second surroundings scan.');
         if (cameraActiveRef.current && startScanCycleRef.current) {
           startScanCycleRef.current();
@@ -446,23 +436,16 @@ export default function HomePage() {
     }
   };
 
-  // Flip Camera (Front / Back switch)
+  // Flip Camera between front and rear
   const handleFlipCamera = async () => {
     const nextMode = facingMode === 'user' ? 'environment' : 'user';
     setFacingMode(nextMode);
-
     if (cameraActive) {
       setCameraStarting(true);
       await startCamera({ facingMode: nextMode });
       setCameraStarting(false);
-      setTimeout(() => {
-        bindStreamToVideo();
-      }, 50);
-      speak(
-        nextMode === 'user'
-          ? 'Switched to front face camera. Starting fresh scan.'
-          : 'Switched to rear surroundings camera. Starting fresh scan.'
-      );
+      setTimeout(() => bindStreamToVideo(), 50);
+      speak(nextMode === 'user' ? 'Switched to front camera.' : 'Switched to rear camera.');
       setTimeout(() => {
         if (cameraActiveRef.current && startScanCycleRef.current) {
           startScanCycleRef.current();
@@ -471,46 +454,7 @@ export default function HomePage() {
     }
   };
 
-  // Deep Gemini AI Scene Scan
-  const handleDeepAiAnalysis = async () => {
-    if (!cameraActive) {
-      speak('Please start the camera first.');
-      return;
-    }
-
-    setIsAnalyzingAi(true);
-    speak('Analyzing full scene with Deep AI.');
-
-    try {
-      const frameBase64 = captureFrame(videoRef.current);
-      if (!frameBase64) {
-        throw new Error('Unable to capture camera frame. Ensure camera is active.');
-      }
-
-      const result = await analyzeImage({
-        imageBase64: frameBase64,
-        intent: 'DESCRIBE_SURROUNDINGS',
-      });
-
-      if (result && result.speech && result.speech !== 'Analysis unavailable.') {
-        setLastSpoken(result.speech);
-        speak(result.speech);
-      } else {
-        const notice =
-          'Deep AI cloud analysis requires the backend server running with GEMINI_API_KEY. Real-time on-device AI is currently active.';
-        setLastSpoken(notice);
-        speak(notice);
-      }
-    } catch (err) {
-      const notice = `Deep AI analysis notice: ${err.message || 'Server unavailable'}. Real-time detection active.`;
-      setLastSpoken(notice);
-      speak(notice);
-    } finally {
-      setIsAnalyzingAi(false);
-    }
-  };
-
-  // Handle Stop Camera
+  // Handle Stop Camera — triggered by tapping anywhere on the active camera screen
   const handleStopCamera = () => {
     if (scanTimerRef.current) {
       clearInterval(scanTimerRef.current);
@@ -547,77 +491,24 @@ export default function HomePage() {
     speak(stopMsg);
   };
 
-  // Repeat description on demand
-  const handleRepeatDescription = () => {
-    if (lastSpoken) {
-      speak(lastSpoken, { interrupt: true });
-    } else {
-      speak('No surroundings description available yet.');
-    }
-  };
-
-  // Toggle voice mute
-  const handleToggleVoice = () => {
-    const nextMuted = setVoiceMuted();
-    setVoiceMutedState(nextMuted);
-    if (!nextMuted) {
-      speak('Voice announcements resumed.');
-    }
-  };
-
   return (
     <div className="app-container">
       <a href="#main-action" className="skip-link">
         Skip to main action
       </a>
 
-      {/* Header */}
-      <header className="app-header">
-        <div className="brand-badge" role="status">
-          <span className="dot" aria-hidden="true"></span>
-          <span>Assistive Surroundings Aid</span>
-        </div>
-        <h1 className="app-title">DigitalVision</h1>
-        <p className="app-subtitle">
-          Real-time AI camera detection and spoken guidance for visually impaired users
-        </p>
+      {/* Semantic Top-Level Heading for Screen Readers */}
+      <h1 className="sr-only">DigitalVision - Assistive Surroundings Aid</h1>
 
-        {/* AI Readiness Pill */}
-        <div
-          className={`ai-status-badge ${modelLoading ? 'loading' : ''}`}
-          role="status"
-          aria-live="polite"
-        >
-          <span>{modelLoading ? '⏳' : modelReady ? '⚡' : '🤖'}</span>
-          <span>
-            {modelLoading
-              ? 'Loading AI Model...'
-              : modelReady
-              ? 'TensorFlow AI Engine: Ready'
-              : 'AI Engine: Standby'}
-          </span>
-        </div>
-      </header>
+      {/* Header — shown during active camera scanning */}
+      {cameraActive && (
+        <header className="app-header">
+          <h1 className="app-title">DigitalVision</h1>
+        </header>
+      )}
 
       {/* Main Interactive Region */}
       <main className="app-main" id="main-content">
-        {/* Welcome Announcement Region */}
-        <section
-          className="guidance-box"
-          aria-labelledby="welcome-heading"
-          role="region"
-        >
-          <h2 id="welcome-heading" className="sr-only">
-            Surroundings Option
-          </h2>
-          <p>
-            <strong>Available Option:</strong> Understand my surroundings.
-          </p>
-          <p className="guidance-instruction">
-            Tap anywhere on the screen below to open the camera and receive 5-second spoken surroundings descriptions.
-          </p>
-        </section>
-
         {/* Error Banners */}
         {cameraError && (
           <div className="alert-card error" role="alert" aria-live="assertive">
@@ -644,41 +535,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Camera Facing Selector (Front Face Camera vs Back Surroundings Camera) */}
-        <div
-          className="facing-selector"
-          role="radiogroup"
-          aria-label="Camera Facing Selection"
-        >
-          <button
-            type="button"
-            className={`mode-pill ${facingMode === 'user' ? 'active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              setFacingMode('user');
-              if (cameraActive) handleStartDetection('user');
-            }}
-            aria-checked={facingMode === 'user'}
-            role="radio"
-          >
-            <span>👤 Front Camera (Face / Selfie)</span>
-          </button>
-          <button
-            type="button"
-            className={`mode-pill ${facingMode === 'environment' ? 'active' : ''}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              setFacingMode('environment');
-              if (cameraActive) handleStartDetection('environment');
-            }}
-            aria-checked={facingMode === 'environment'}
-            role="radio"
-          >
-            <span>📷 Back Camera (Surroundings)</span>
-          </button>
-        </div>
-
-        {/* Dynamic State: Inactive (Tap Anywhere) vs Active Camera */}
+        {/* Dynamic State: Clean Rectangular Column vs Active Camera */}
         {!cameraActive ? (
           <div
             id="main-action"
@@ -692,53 +549,19 @@ export default function HomePage() {
                 if (!cameraStarting) handleStartDetection(facingMode);
               }
             }}
-            aria-label={`Tap anywhere on the screen to start detection using ${
-              facingMode === 'user' ? 'front face camera' : 'rear surroundings camera'
-            }`}
+            aria-label="Tap anywhere on the screen to start surroundings detection"
           >
-            {/* Glowing Orb & Pulsing Audio Visualizer */}
-            <div
-              className="orb-section"
-              aria-hidden="true"
-              role="presentation"
-            >
-              <div className="orb-wrapper">
-                <div className="pulse-ring delay-2"></div>
-                <div className="pulse-ring delay-1"></div>
-                <div className="pulse-ring"></div>
-                <div className="orb-core">
-                  <span style={{ fontSize: '2.5rem' }}>
-                    {facingMode === 'user' ? '👤' : '📷'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Pulsing Audio Visualizer */}
-              <div className="visualizer-container playing" aria-hidden="true">
-                <div className="visualizer-bar"></div>
-                <div className="visualizer-bar"></div>
-                <div className="visualizer-bar"></div>
-                <div className="visualizer-bar"></div>
-                <div className="visualizer-bar"></div>
-                <div className="visualizer-bar"></div>
-                <div className="visualizer-bar"></div>
-              </div>
-            </div>
-
-            {/* Tap Anywhere Accessible Banner */}
             <div className="tap-prompt-container">
-              <div className="tap-pulse-icon" aria-hidden="true">
+              <div className="tap-prompt-icon" aria-hidden="true">
                 👆
               </div>
               <h2 className="tap-prompt-title">
                 {cameraStarting ? 'Starting Camera...' : 'Tap Anywhere to Start'}
               </h2>
               <p className="tap-prompt-subtitle">
-                {cameraStarting
-                  ? 'Accessing camera and initializing surroundings AI...'
-                  : `Touch or click anywhere on the screen to begin 5-second surroundings scanning (${
-                      facingMode === 'user' ? 'Front / Face' : 'Rear / Surroundings'
-                    })`}
+                {cameraStarting || modelLoading
+                  ? 'Accessing camera and loading model...'
+                  : 'Touch or click anywhere on the screen to begin'}
               </p>
             </div>
           </div>
@@ -751,7 +574,7 @@ export default function HomePage() {
           >
             {/* Tap Anywhere to Stop Banner */}
             <div className="tap-to-stop-banner" aria-hidden="true">
-              <span>👆 Tap anywhere on screen to stop describing</span>
+              <span>Tap anywhere on screen to stop describing</span>
             </div>
 
             {/* 5-Second Surroundings Scan Status & Progress Card */}
@@ -766,15 +589,6 @@ export default function HomePage() {
                   role="status"
                   aria-live="polite"
                 >
-                  <span aria-hidden="true">
-                    {scanPhase === 'scanning'
-                      ? '⏱️'
-                      : scanPhase === 'speaking'
-                      ? '🗣️'
-                      : scanPhase === 'paused'
-                      ? '⏸️'
-                      : '✅'}
-                  </span>
                   <span>
                     {scanPhase === 'scanning'
                       ? `Scanning surroundings: ${scanCountdown}s remaining...`
@@ -840,7 +654,7 @@ export default function HomePage() {
               </div>
 
               <div className="camera-tap-hint" aria-hidden="true">
-                <span>👆 Tap to Stop</span>
+                <span>Tap to Stop</span>
               </div>
 
               <video
@@ -866,94 +680,18 @@ export default function HomePage() {
               ></canvas>
             </div>
 
-            {/* Controls Row */}
+            {/* Camera Flip Button */}
             <div
               className="controls-row"
-              role="toolbar"
-              aria-label="Surroundings Controls"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Primary 5-Second Scan Button */}
-              <button
-                className="btn btn-scan-now"
-                onClick={startScanCycle}
-                aria-label="Trigger immediate 5-second surroundings scan"
-              >
-                <span aria-hidden="true">🔍</span>
-                <span>Scan Now (5s)</span>
-              </button>
-
-              {/* Continuous Auto-Scan Toggle */}
-              <button
-                className={`btn btn-autocycle ${autoScanEnabled ? 'active' : ''}`}
-                onClick={() => {
-                  const nextVal = !autoScanEnabled;
-                  setAutoScanEnabled(nextVal);
-                  speak(
-                    nextVal
-                      ? 'Continuous 5-second auto-scan enabled.'
-                      : 'Auto-scan paused. Press Scan Now button to scan when ready.'
-                  );
-                }}
-                aria-label={
-                  autoScanEnabled
-                    ? 'Continuous 5-second auto-scan is active. Press to pause automatic cycling.'
-                    : 'Continuous auto-scan is paused. Press to resume automatic cycling.'
-                }
-              >
-                <span aria-hidden="true">{autoScanEnabled ? '🔄' : '⏸️'}</span>
-                <span>{autoScanEnabled ? 'Auto-Scan: ON' : 'Auto-Scan: OFF'}</span>
-              </button>
-
-              <button
-                className="btn btn-danger"
-                onClick={handleStopCamera}
-                aria-label="Stop Camera"
-              >
-                <span aria-hidden="true">⏹️</span>
-                <span>Stop Camera</span>
-              </button>
-
               <button
                 className="btn btn-flip"
                 onClick={handleFlipCamera}
                 disabled={cameraStarting}
-                aria-label={`Flip to ${facingMode === 'user' ? 'Rear Camera' : 'Front Face Camera'}`}
+                aria-label={`Switch to ${facingMode === 'user' ? 'rear camera' : 'front camera'}`}
               >
-                <span aria-hidden="true">🔄</span>
-                <span>
-                  {facingMode === 'user' ? 'Flip to Rear' : 'Flip to Front (Face)'}
-                </span>
-              </button>
-
-              <button
-                className="btn btn-primary"
-                onClick={handleRepeatDescription}
-                aria-label="Repeat Last Spoken Description"
-              >
-                <span aria-hidden="true">🔁</span>
-                <span>Repeat</span>
-              </button>
-
-              <button
-                className="btn btn-ai"
-                onClick={handleDeepAiAnalysis}
-                disabled={isAnalyzingAi}
-                aria-label="Deep AI Scene Analysis"
-              >
-                <span aria-hidden="true">🧠</span>
-                <span>{isAnalyzingAi ? 'Analyzing...' : 'Deep AI Scan'}</span>
-              </button>
-
-              <button
-                className="btn"
-                onClick={handleToggleVoice}
-                aria-label={
-                  voiceMuted ? 'Resume Voice Announcements' : 'Pause Voice Announcements'
-                }
-              >
-                <span aria-hidden="true">{voiceMuted ? '🔇' : '🔊'}</span>
-                <span>{voiceMuted ? 'Resume Voice' : 'Pause Voice'}</span>
+                {facingMode === 'user' ? 'Switch to Rear Camera' : 'Switch to Front Camera'}
               </button>
             </div>
 
@@ -997,29 +735,33 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Live Spoken Caption Banner */}
-        <section
-          className="caption-banner"
-          aria-live="polite"
-          role="status"
-          aria-label="Spoken surroundings description"
-        >
-          <span className="caption-icon" aria-hidden="true">
-            💬
-          </span>
-          <div className="caption-text">{lastSpoken}</div>
-        </section>
+        {/* Live Spoken Caption Banner — visible during active camera scanning */}
+        {cameraActive && (
+          <section
+            className="caption-banner"
+            aria-live="polite"
+            role="status"
+            aria-label="Spoken surroundings description"
+          >
+            <span className="caption-icon" aria-hidden="true">
+              💬
+            </span>
+            <div className="caption-text">{lastSpoken}</div>
+          </section>
+        )}
       </main>
 
-      {/* Footer & Assistive Disclaimer */}
-      <footer className="app-footer">
-        <p>
-          <strong>Assistive Notice:</strong> DigitalVision is an environmental awareness aid. Standard monocular camera feeds cannot measure depth or guarantee collision avoidance. Always use traditional mobility aids.
-        </p>
-        <p style={{ marginTop: '0.25rem', opacity: 0.75 }}>
-          TECH TITANS — HACK ATTACK 2026
-        </p>
-      </footer>
+      {/* Footer & Assistive Disclaimer — visible during active camera scanning */}
+      {cameraActive && (
+        <footer className="app-footer">
+          <p>
+            <strong>Assistive Notice:</strong> DigitalVision is an environmental awareness aid. Standard monocular camera feeds cannot measure depth or guarantee collision avoidance. Always use traditional mobility aids.
+          </p>
+          <p style={{ marginTop: '0.25rem', opacity: 0.75 }}>
+            TECH TITANS — HACK ATTACK 2026
+          </p>
+        </footer>
+      )}
     </div>
   );
 }
