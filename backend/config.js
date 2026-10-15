@@ -23,7 +23,7 @@ export const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
  * Kept in this single configuration constant as required by the contract.
  * Default: gemini-2.5-flash (with override available via process.env.GEMINI_MODEL)
  */
-export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 /** Configurable request timeout in milliseconds (~15 seconds) */
 export const REQUEST_TIMEOUT_MS = parseInt(process.env.REQUEST_TIMEOUT_MS || '15000', 10);
