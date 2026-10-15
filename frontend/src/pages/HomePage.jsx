@@ -1,9 +1,11 @@
 /**
- * DigitalVision — Accessible Surroundings Assistant
+ * DigitalVision — Accessible Surroundings & Vision Assistant
  *
  * Real working frontend for visually impaired users.
  * Combines high-contrast mobile-first UI, Web Speech API announcements,
- * live camera feed, and real browser-based COCO-SSD object detection.
+ * live camera feed (with front/back camera support & mirroring),
+ * real-time browser-based TensorFlow.js COCO-SSD object/face detection,
+ * and backend multimodal AI integration.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -11,6 +13,7 @@ import {
   startCamera,
   stopCamera,
   getVideoStream,
+  captureFrame,
 } from '../camera/cameraService.js';
 import {
   loadDetectionModel,
@@ -24,6 +27,7 @@ import {
   getVoiceMuted,
   formatSurroundingsDescription,
 } from '../services/speechService.js';
+import { analyzeImage } from '../ai/vision.js';
 
 const WELCOME_SPEECH =
   'Welcome to DigitalVision. A camera-based surroundings assistant for visually impaired users. Touch the screen or press the large button to understand your surroundings.';
@@ -32,8 +36,10 @@ export default function HomePage() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraStarting, setCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState(null);
+  const [facingMode, setFacingMode] = useState('user'); // Default to front camera so face shows on webcams/phones
 
-  const [modelLoading, setModelLoading] = useState(false);
+  const [modelLoading, setModelLoading] = useState(() => !isModelReady());
+  const [modelReady, setModelReady] = useState(isModelReady());
   const [modelError, setModelError] = useState(null);
 
   const [detectedObjects, setDetectedObjects] = useState([]);
@@ -41,10 +47,13 @@ export default function HomePage() {
     'Touch the start button below to activate the camera and understand your surroundings.'
   );
   const [voiceMuted, setVoiceMutedState] = useState(getVoiceMuted());
+  const [isAnalyzingAi, setIsAnalyzingAi] = useState(false);
 
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const detectionIntervalRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const isDetectingRef = useRef(false);
+  const lastDetectionTimeRef = useRef(0);
   const lastSpokenLabelsRef = useRef('');
   const lastSpokenTimeRef = useRef(0);
   const hasSpokenWelcomeRef = useRef(false);
@@ -80,11 +89,61 @@ export default function HomePage() {
     };
   }, []);
 
-  // Cleanup camera and intervals on unmount
+  // Preload detection model in background on initial page mount so detection is instant
+  useEffect(() => {
+    let isCancelled = false;
+
+    if (!isModelReady()) {
+      loadDetectionModel()
+        .then(() => {
+          if (!isCancelled) {
+            setModelLoading(false);
+            setModelReady(true);
+          }
+        })
+        .catch((err) => {
+          if (!isCancelled) {
+            setModelLoading(false);
+            console.warn('[DigitalVision] Model background preload notice:', err);
+          }
+        });
+    }
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  // Bind media stream to visible video element reliably
+  const bindStreamToVideo = useCallback((targetEl) => {
+    const el = targetEl || videoRef.current;
+    if (!el) return;
+
+    const stream = getVideoStream();
+    if (stream) {
+      if (el.srcObject !== stream) {
+        el.srcObject = stream;
+      }
+      el.muted = true;
+      el.defaultMuted = true;
+      el.play().catch((err) => {
+        console.warn('[DigitalVision] Video playback notice:', err);
+      });
+    }
+  }, []);
+
+  // Re-bind stream whenever cameraActive state changes
+  useEffect(() => {
+    if (cameraActive) {
+      bindStreamToVideo();
+    }
+  }, [cameraActive, bindStreamToVideo]);
+
+  // Cleanup camera, animations, and speech on unmount
   useEffect(() => {
     return () => {
-      if (detectionIntervalRef.current) {
-        clearInterval(detectionIntervalRef.current);
+      if (animFrameRef.current) {
+        cancelAnimationFrame(animFrameRef.current);
       }
       stopCamera();
       stopSpeaking();
@@ -97,9 +156,12 @@ export default function HomePage() {
     const video = videoRef.current;
     if (!canvas || !video) return;
 
-    if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
+    const w = video.videoWidth || 640;
+    const h = video.videoHeight || 480;
+
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
     }
 
     const ctx = canvas.getContext('2d');
@@ -109,82 +171,115 @@ export default function HomePage() {
 
     for (const pred of predictions) {
       const [x, y, width, height] = pred.bbox;
+      const isPerson = pred.label.toLowerCase() === 'person';
 
-      // High-contrast neon bounding box
-      ctx.strokeStyle = '#00e5ff';
-      ctx.lineWidth = 3;
+      // Neon bounding box: emerald green for person/face, cyan for general objects
+      ctx.strokeStyle = isPerson ? '#00ff88' : '#00e5ff';
+      ctx.lineWidth = 4;
       ctx.strokeRect(x, y, width, height);
 
       // Label background badge
-      const labelText = `${pred.label} (${pred.score}%)`;
-      ctx.font = 'bold 15px system-ui, sans-serif';
-      const textWidth = ctx.measureText(labelText).width;
-      const tagY = y > 26 ? y - 24 : y;
+      const displayLabel = isPerson ? `👤 Person / Face (${pred.score}%)` : `${pred.label} (${pred.score}%)`;
+      ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
+      const textWidth = ctx.measureText(displayLabel).width;
+      const tagY = y > 30 ? y - 28 : y;
 
       ctx.fillStyle = 'rgba(11, 15, 25, 0.9)';
-      ctx.fillRect(x, tagY, textWidth + 14, 22);
+      ctx.fillRect(x, tagY, textWidth + 16, 26);
 
       // Label text
-      ctx.fillStyle = '#ffffff';
-      ctx.fillText(labelText, x + 7, tagY + 16);
+      ctx.fillStyle = isPerson ? '#00ff88' : '#ffffff';
+      ctx.fillText(displayLabel, x + 8, tagY + 18);
     }
   }, []);
 
-  // Start continuous detection loop on active camera feed
-  const runDetectionCycle = useCallback(async () => {
-    const video = videoRef.current;
-    if (!video || video.readyState < 2 || !video.videoWidth) {
-      return;
-    }
+  // Continuous detection loop using requestAnimationFrame + 400ms throttle
+  useEffect(() => {
+    if (!cameraActive) return;
 
-    const predictions = await detectObjects(video);
-    setDetectedObjects(predictions);
-    drawDetections(predictions);
+    let animId = null;
 
-    if (predictions.length > 0) {
-      // Build signature of detected labels to detect changes in surroundings
-      const currentSignature = predictions
-        .map((p) => `${p.label}:${p.location}`)
-        .sort()
-        .join('|');
-
+    const detectFrame = async () => {
+      const video = videoRef.current;
       const now = Date.now();
-      const hasChanged = currentSignature !== lastSpokenLabelsRef.current;
-      const cooldownElapsed = now - lastSpokenTimeRef.current > 12000; // 12-second cooldown if view is static
 
-      if (hasChanged || cooldownElapsed) {
-        const description = formatSurroundingsDescription(predictions);
-        setLastSpoken(description);
-        lastSpokenLabelsRef.current = currentSignature;
-        lastSpokenTimeRef.current = now;
-        speak(description);
+      if (
+        video &&
+        video.readyState >= 2 &&
+        video.videoWidth > 0 &&
+        isModelReady() &&
+        !isDetectingRef.current &&
+        now - lastDetectionTimeRef.current >= 400
+      ) {
+        isDetectingRef.current = true;
+        lastDetectionTimeRef.current = now;
+
+        try {
+          const predictions = await detectObjects(video, 0.35);
+          setDetectedObjects(predictions);
+          drawDetections(predictions);
+
+          if (predictions.length > 0) {
+            const currentSignature = predictions
+              .map((p) => `${p.label}:${p.location}`)
+              .sort()
+              .join('|');
+
+            const hasChanged = currentSignature !== lastSpokenLabelsRef.current;
+            const cooldownElapsed = now - lastSpokenTimeRef.current > 10000;
+
+            if (hasChanged || cooldownElapsed) {
+              const description = formatSurroundingsDescription(predictions);
+              setLastSpoken(description);
+              lastSpokenLabelsRef.current = currentSignature;
+              lastSpokenTimeRef.current = now;
+              speak(description);
+            }
+          } else {
+            // If clear for over 15 seconds
+            if (lastSpokenLabelsRef.current !== '' && now - lastSpokenTimeRef.current > 15000) {
+              lastSpokenLabelsRef.current = '';
+              lastSpokenTimeRef.current = now;
+              const msg = 'No distinct objects currently detected in view.';
+              setLastSpoken(msg);
+              speak(msg);
+            }
+          }
+        } catch (err) {
+          console.warn('[DigitalVision] Detection frame error:', err);
+        } finally {
+          isDetectingRef.current = false;
+        }
       }
-    } else {
-      // If nothing detected for over 15 seconds after previous detections, update status
-      const now = Date.now();
-      if (lastSpokenLabelsRef.current !== '' && now - lastSpokenTimeRef.current > 15000) {
-        lastSpokenLabelsRef.current = '';
-        lastSpokenTimeRef.current = now;
-        const msg = 'No distinct objects currently detected in view.';
-        setLastSpoken(msg);
-        speak(msg);
+
+      animId = requestAnimationFrame(detectFrame);
+    };
+
+    animId = requestAnimationFrame(detectFrame);
+
+    return () => {
+      if (animId) {
+        cancelAnimationFrame(animId);
       }
-    }
-  }, [drawDetections]);
+    };
+  }, [cameraActive, drawDetections]);
 
   // Handle Start Camera & Surroundings Detection
-  const handleStartDetection = async () => {
+  const handleStartDetection = async (chosenFacingMode) => {
+    const targetFacing = chosenFacingMode || facingMode;
     setCameraStarting(true);
     setCameraError(null);
     setModelError(null);
 
-    // Request rear-facing camera access
-    const success = await startCamera({ facingMode: 'environment' });
+    // Stop previous stream to guarantee clean renegotiation
+    stopCamera();
+
+    const success = await startCamera({ facingMode: targetFacing });
 
     if (!success) {
       setCameraStarting(false);
       const errMsg =
-        'Camera permission was denied or no camera device is available. Please allow camera permissions in your browser.';
+        'Camera permission was denied or no camera device is available. Please check browser permissions and allow camera access.';
       setCameraError(errMsg);
       speak(errMsg);
       return;
@@ -193,16 +288,10 @@ export default function HomePage() {
     setCameraActive(true);
     setCameraStarting(false);
 
-    // Bind stream to visible video element
-    const stream = getVideoStream();
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-      try {
-        await videoRef.current.play();
-      } catch (e) {
-        console.warn('Video play interrupted:', e);
-      }
-    }
+    // Ensure video element receives stream as soon as mounted
+    setTimeout(() => {
+      bindStreamToVideo();
+    }, 50);
 
     // Load pretrained COCO-SSD model if not yet loaded
     if (!isModelReady()) {
@@ -211,29 +300,87 @@ export default function HomePage() {
         speak('Camera active. Loading AI detection model.');
         await loadDetectionModel();
         setModelLoading(false);
+        setModelReady(true);
         speak('AI detection ready. Scanning your surroundings now.');
       } catch (err) {
         setModelLoading(false);
-        const errText = `Detection model could not be loaded: ${err.message || 'Network error'}. Real camera feed is active.`;
+        const errText = `Detection model could not be loaded: ${err.message || 'Network error'}. Live camera feed is active.`;
         setModelError(errText);
         speak(errText);
       }
     } else {
-      speak('Camera active. Scanning your surroundings.');
+      speak(
+        targetFacing === 'user'
+          ? 'Front camera active. Detecting face and surroundings.'
+          : 'Surroundings camera active. Scanning your surroundings.'
+      );
+    }
+  };
+
+  // Flip Camera (Front / Back switch)
+  const handleFlipCamera = async () => {
+    const nextMode = facingMode === 'user' ? 'environment' : 'user';
+    setFacingMode(nextMode);
+
+    if (cameraActive) {
+      setCameraStarting(true);
+      await startCamera({ facingMode: nextMode });
+      setCameraStarting(false);
+      setTimeout(() => {
+        bindStreamToVideo();
+      }, 50);
+      speak(
+        nextMode === 'user'
+          ? 'Switched to front face camera.'
+          : 'Switched to rear surroundings camera.'
+      );
+    }
+  };
+
+  // Deep Gemini AI Scene Scan
+  const handleDeepAiAnalysis = async () => {
+    if (!cameraActive) {
+      speak('Please start the camera first.');
+      return;
     }
 
-    // Start periodic detection loop every 800ms
-    if (detectionIntervalRef.current) {
-      clearInterval(detectionIntervalRef.current);
+    setIsAnalyzingAi(true);
+    speak('Analyzing full scene with Deep AI.');
+
+    try {
+      const frameBase64 = captureFrame(videoRef.current);
+      if (!frameBase64) {
+        throw new Error('Unable to capture camera frame. Ensure camera is active.');
+      }
+
+      const result = await analyzeImage({
+        imageBase64: frameBase64,
+        intent: 'DESCRIBE_SURROUNDINGS',
+      });
+
+      if (result && result.speech && result.speech !== 'Analysis unavailable.') {
+        setLastSpoken(result.speech);
+        speak(result.speech);
+      } else {
+        const notice =
+          'Deep AI cloud analysis requires the backend server running with GEMINI_API_KEY. Real-time on-device AI is currently active.';
+        setLastSpoken(notice);
+        speak(notice);
+      }
+    } catch (err) {
+      const notice = `Deep AI analysis notice: ${err.message || 'Server unavailable'}. Real-time detection active.`;
+      setLastSpoken(notice);
+      speak(notice);
+    } finally {
+      setIsAnalyzingAi(false);
     }
-    detectionIntervalRef.current = setInterval(runDetectionCycle, 800);
   };
 
   // Handle Stop Camera
   const handleStopCamera = () => {
-    if (detectionIntervalRef.current) {
-      clearInterval(detectionIntervalRef.current);
-      detectionIntervalRef.current = null;
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
     }
 
     stopCamera();
@@ -287,8 +434,24 @@ export default function HomePage() {
         </div>
         <h1 className="app-title">DigitalVision</h1>
         <p className="app-subtitle">
-          Real-time camera detection and spoken guidance for visually impaired users
+          Real-time AI camera detection and spoken guidance for visually impaired users
         </p>
+
+        {/* AI Readiness Pill */}
+        <div
+          className={`ai-status-badge ${modelLoading ? 'loading' : ''}`}
+          role="status"
+          aria-live="polite"
+        >
+          <span>{modelLoading ? '⏳' : modelReady ? '⚡' : '🤖'}</span>
+          <span>
+            {modelLoading
+              ? 'Loading AI Model...'
+              : modelReady
+              ? 'TensorFlow AI Engine: Ready'
+              : 'AI Engine: Standby'}
+          </span>
+        </div>
       </header>
 
       {/* Main Interactive Region */}
@@ -306,7 +469,7 @@ export default function HomePage() {
             <strong>Available Option:</strong> Understand my surroundings.
           </p>
           <p className="guidance-instruction">
-            Press the large button below to open the camera and receive spoken descriptions of objects around you.
+            Choose your camera preference and press the start button below to open the camera and receive spoken descriptions.
           </p>
         </section>
 
@@ -317,7 +480,10 @@ export default function HomePage() {
               ⚠️
             </span>
             <div>
-              <strong>Camera Error:</strong> {cameraError}
+              <strong>Camera Access Notice:</strong> {cameraError}
+              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
+                Tip: Click the camera / lock icon in your browser address bar to allow camera access, then try again.
+              </div>
             </div>
           </div>
         )}
@@ -333,6 +499,38 @@ export default function HomePage() {
           </div>
         )}
 
+        {/* Camera Facing Selector (Front Face Camera vs Back Surroundings Camera) */}
+        <div
+          className="facing-selector"
+          role="radiogroup"
+          aria-label="Camera Facing Selection"
+        >
+          <button
+            type="button"
+            className={`mode-pill ${facingMode === 'user' ? 'active' : ''}`}
+            onClick={() => {
+              setFacingMode('user');
+              if (cameraActive) handleStartDetection('user');
+            }}
+            aria-checked={facingMode === 'user'}
+            role="radio"
+          >
+            <span>👤 Front Camera (Face / Selfie)</span>
+          </button>
+          <button
+            type="button"
+            className={`mode-pill ${facingMode === 'environment' ? 'active' : ''}`}
+            onClick={() => {
+              setFacingMode('environment');
+              if (cameraActive) handleStartDetection('environment');
+            }}
+            aria-checked={facingMode === 'environment'}
+            role="radio"
+          >
+            <span>📷 Back Camera (Surroundings)</span>
+          </button>
+        </div>
+
         {/* Dynamic State: Inactive vs Active Camera */}
         {!cameraActive ? (
           <>
@@ -347,7 +545,9 @@ export default function HomePage() {
                 <div className="pulse-ring delay-1"></div>
                 <div className="pulse-ring"></div>
                 <div className="orb-core">
-                  <span style={{ fontSize: '2.5rem' }}>📷</span>
+                  <span style={{ fontSize: '2.5rem' }}>
+                    {facingMode === 'user' ? '👤' : '📷'}
+                  </span>
                 </div>
               </div>
 
@@ -368,9 +568,11 @@ export default function HomePage() {
               <button
                 id="main-action"
                 className="btn-hero"
-                onClick={handleStartDetection}
+                onClick={() => handleStartDetection(facingMode)}
                 disabled={cameraStarting}
-                aria-label="Touch to start surroundings detection"
+                aria-label={`Touch to start detection using ${
+                  facingMode === 'user' ? 'front face camera' : 'rear surroundings camera'
+                }`}
               >
                 <span aria-hidden="true" style={{ fontSize: '1.8rem' }}>
                   👁️
@@ -378,7 +580,7 @@ export default function HomePage() {
                 <span>
                   {cameraStarting
                     ? 'Starting Camera...'
-                    : 'Touch to start surroundings detection'}
+                    : `Touch to start (${facingMode === 'user' ? 'Front / Face' : 'Surroundings'})`}
                 </span>
               </button>
             </div>
@@ -386,30 +588,48 @@ export default function HomePage() {
         ) : (
           <>
             {/* Live Camera Feed & Canvas Overlay */}
-            <div className="camera-card" aria-label="Live camera feed showing detected surroundings">
+            <div
+              className="camera-card"
+              aria-label="Live camera feed showing detected surroundings"
+            >
               <div className="camera-status-pill">
                 <span className="indicator-dot" aria-hidden="true"></span>
                 <span>
                   {modelLoading
                     ? 'Loading AI Model...'
-                    : `Live Detection (${detectedObjects.length} in view)`}
+                    : `Live: ${facingMode === 'user' ? 'Front (Face)' : 'Rear (Surroundings)'} (${detectedObjects.length} in view)`}
                 </span>
               </div>
 
               <video
-                ref={videoRef}
-                className="camera-video"
+                ref={(el) => {
+                  videoRef.current = el;
+                  if (el && cameraActive) {
+                    bindStreamToVideo(el);
+                  }
+                }}
+                onLoadedMetadata={() => bindStreamToVideo()}
+                onCanPlay={() => bindStreamToVideo()}
+                className={`camera-video ${facingMode === 'user' ? 'mirrored' : ''}`}
                 autoPlay
                 playsInline
                 muted
                 aria-label="Camera live preview"
               ></video>
 
-              <canvas ref={canvasRef} className="camera-overlay" aria-hidden="true"></canvas>
+              <canvas
+                ref={canvasRef}
+                className={`camera-overlay ${facingMode === 'user' ? 'mirrored' : ''}`}
+                aria-hidden="true"
+              ></canvas>
             </div>
 
             {/* Controls Row */}
-            <div className="controls-row" role="toolbar" aria-label="Surroundings Controls">
+            <div
+              className="controls-row"
+              role="toolbar"
+              aria-label="Surroundings Controls"
+            >
               <button
                 className="btn btn-danger"
                 onClick={handleStopCamera}
@@ -420,18 +640,42 @@ export default function HomePage() {
               </button>
 
               <button
+                className="btn btn-flip"
+                onClick={handleFlipCamera}
+                disabled={cameraStarting}
+                aria-label={`Flip to ${facingMode === 'user' ? 'Rear Camera' : 'Front Face Camera'}`}
+              >
+                <span aria-hidden="true">🔄</span>
+                <span>
+                  {facingMode === 'user' ? 'Flip to Rear' : 'Flip to Front (Face)'}
+                </span>
+              </button>
+
+              <button
+                className="btn btn-ai"
+                onClick={handleDeepAiAnalysis}
+                disabled={isAnalyzingAi}
+                aria-label="Deep AI Scene Analysis"
+              >
+                <span aria-hidden="true">🧠</span>
+                <span>{isAnalyzingAi ? 'Analyzing...' : 'Deep AI Scan'}</span>
+              </button>
+
+              <button
                 className="btn btn-primary"
                 onClick={handleRepeatDescription}
                 aria-label="Repeat Last Spoken Description"
               >
-                <span aria-hidden="true">🔄</span>
-                <span>Repeat Description</span>
+                <span aria-hidden="true">🔁</span>
+                <span>Repeat</span>
               </button>
 
               <button
                 className="btn"
                 onClick={handleToggleVoice}
-                aria-label={voiceMuted ? 'Resume Voice Announcements' : 'Pause Voice Announcements'}
+                aria-label={
+                  voiceMuted ? 'Resume Voice Announcements' : 'Pause Voice Announcements'
+                }
               >
                 <span aria-hidden="true">{voiceMuted ? '🔇' : '🔊'}</span>
                 <span>{voiceMuted ? 'Resume Voice' : 'Pause Voice'}</span>
@@ -440,21 +684,37 @@ export default function HomePage() {
 
             {/* Live Detections List */}
             {detectedObjects.length > 0 && (
-              <section className="detections-panel" aria-labelledby="detections-title">
+              <section
+                className="detections-panel"
+                aria-labelledby="detections-title"
+              >
                 <div className="detections-heading">
-                  <h3 id="detections-title">Detected Objects in View</h3>
-                  <span className="location-pill">Real-Time</span>
+                  <h3 id="detections-title">Detected Objects & People in View</h3>
+                  <span className="location-pill">Real-Time AI</span>
                 </div>
                 <div className="detections-grid">
-                  {detectedObjects.map((obj, idx) => (
-                    <div className="detection-chip" key={`${obj.label}-${idx}`}>
-                      <span className="chip-label">{obj.label}</span>
-                      <div className="chip-meta">
-                        <span>Confidence: {obj.score}%</span>
-                        <span className="location-pill">{obj.location}</span>
+                  {detectedObjects.map((obj, idx) => {
+                    const isPerson = obj.label.toLowerCase() === 'person';
+                    return (
+                      <div
+                        className="detection-chip"
+                        key={`${obj.label}-${idx}`}
+                        style={
+                          isPerson
+                            ? { borderColor: '#00ff88', boxShadow: '0 0 10px rgba(0,255,136,0.2)' }
+                            : {}
+                        }
+                      >
+                        <span className="chip-label">
+                          {isPerson ? '👤 Person / Face' : obj.label}
+                        </span>
+                        <div className="chip-meta">
+                          <span>Confidence: {obj.score}%</span>
+                          <span className="location-pill">{obj.location}</span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             )}

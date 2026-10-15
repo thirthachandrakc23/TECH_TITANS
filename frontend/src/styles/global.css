@@ -443,6 +443,11 @@ footer.app-footer {
   height: 100%;
   object-fit: cover;
   display: block;
+  transition: transform 0.2s ease;
+}
+
+.camera-video.mirrored {
+  transform: scaleX(-1);
 }
 
 .camera-overlay {
@@ -452,6 +457,10 @@ footer.app-footer {
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+
+.camera-overlay.mirrored {
+  transform: scaleX(-1);
 }
 
 .camera-status-pill {
@@ -632,4 +641,88 @@ footer.app-footer {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Facing mode selector pills */
+.facing-selector {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+
+.mode-pill {
+  padding: 0.6rem 1.2rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mode-pill:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-text);
+  transform: translateY(-1px);
+}
+
+.mode-pill.active {
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.15) 0%, rgba(2, 132, 199, 0.25) 100%);
+  border-color: var(--color-primary);
+  color: #ffffff;
+  box-shadow: 0 0 16px rgba(0, 229, 255, 0.25);
+}
+
+/* AI Status Badge */
+.ai-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  padding: 0.3rem 0.75rem;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+  border-radius: var(--radius-full);
+  margin-top: var(--spacing-xs);
+  font-weight: 600;
+}
+
+.ai-status-badge.loading {
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+/* Deep AI Analysis Button */
+.btn-ai {
+  background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+  color: #ffffff;
+  border-color: #a78bfa;
+  box-shadow: 0 4px 15px rgba(124, 58, 237, 0.3);
+}
+
+.btn-ai:hover:not(:disabled) {
+  background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.45);
+}
+
+.btn-flip {
+  background: var(--color-surface-elevated);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.btn-flip:hover:not(:disabled) {
+  background: var(--color-primary);
+  color: #0b0f19;
 }

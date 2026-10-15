@@ -91,10 +91,10 @@ export async function loadDetectionModel() {
  * Run object detection on an active HTMLVideoElement.
  *
  * @param {HTMLVideoElement} videoElement
- * @param {number} [minConfidence=0.45]
+ * @param {number} [minConfidence=0.35]
  * @returns {Promise<Array<{ label: string, score: number, bbox: [number, number, number, number], location: 'left'|'center'|'right' }>>}
  */
-export async function detectObjects(videoElement, minConfidence = 0.45) {
+export async function detectObjects(videoElement, minConfidence = 0.35) {
   if (!loadedModel || modelStatus !== 'ready') {
     return [];
   }

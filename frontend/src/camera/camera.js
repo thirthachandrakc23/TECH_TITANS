@@ -64,13 +64,13 @@ export function getOrCreateHiddenVideo() {
       video.muted = true;
       video.defaultMuted = true;
       video.autoplay = true;
-      // Position offscreen to prevent UI interference while remaining active in DOM
+      // Position offscreen with standard dimensions to prevent browser rendering throttling
       video.style.position = 'fixed';
       video.style.top = '-9999px';
       video.style.left = '-9999px';
-      video.style.width = '1px';
-      video.style.height = '1px';
-      video.style.opacity = '0';
+      video.style.width = '320px';
+      video.style.height = '240px';
+      video.style.opacity = '0.001';
       video.style.pointerEvents = 'none';
       video.setAttribute('aria-hidden', 'true');
 
@@ -101,10 +101,10 @@ function getOrCreateOffscreenCanvas() {
 /**
  * Wait until the video element has loaded metadata and has non-zero frame dimensions.
  * @param {HTMLVideoElement} video
- * @param {number} [timeoutMs=3500]
+ * @param {number} [timeoutMs=1500]
  * @returns {Promise<boolean>}
  */
-function waitForVideoReady(video, timeoutMs = 3500) {
+function waitForVideoReady(video, timeoutMs = 1500) {
   return new Promise((resolve) => {
     if (video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
       resolve(true);
@@ -166,17 +166,20 @@ export function getVideoElement() {
   return hiddenVideoElement;
 }
 
+/** @type {string|null} */
+let currentFacingMode = null;
+
 /**
  * Request camera access and start the video stream.
- * Prefers the rear camera ('environment') at ~1280x720 on supported devices.
+ * Prefers the requested facing mode at ~1280x720 on supported devices.
  * Falls back to other available cameras if preferred constraints fail.
  * Resolves true on success, false on expected failures (without throwing).
  *
  * @param {Object} [options]
- * @param {string} [options.facingMode='environment'] - Preferred facing mode.
+ * @param {string} [options.facingMode='user'] - Preferred facing mode ('user' | 'environment').
  * @returns {Promise<boolean>} True if camera started successfully, false otherwise.
  */
-export async function startCamera({ facingMode = 'environment' } = {}) {
+export async function startCamera({ facingMode = 'user' } = {}) {
   // Check for mediaDevices browser support
   if (
     typeof navigator === 'undefined' ||
@@ -191,8 +194,8 @@ export async function startCamera({ facingMode = 'environment' } = {}) {
     return false;
   }
 
-  // If already active with working tracks, return immediately
-  if (isCameraActive() && hiddenVideoElement && hiddenVideoElement.readyState >= 2) {
+  // If already active with same requested facing mode and working tracks, return immediately
+  if (isCameraActive() && currentFacingMode === facingMode && hiddenVideoElement && hiddenVideoElement.readyState >= 2) {
     return true;
   }
 
@@ -277,6 +280,7 @@ export async function startCamera({ facingMode = 'environment' } = {}) {
   }
 
   activeStream = stream;
+  currentFacingMode = facingMode;
 
   // Listen for unexpected track termination (e.g. user revoked permission or disconnected camera)
   stream.getVideoTracks().forEach((track) => {
@@ -323,6 +327,8 @@ export async function startCamera({ facingMode = 'environment' } = {}) {
  * @returns {void}
  */
 export function stopCamera() {
+  currentFacingMode = null;
+
   if (activeStream) {
     activeStream.getTracks().forEach((track) => {
       try {
@@ -361,20 +367,22 @@ export function stopCamera() {
  * - Returns null if the camera is inactive, the video is not ready, or capture fails.
  * - Does NOT save, upload, or log images.
  *
+ * @param {HTMLVideoElement} [customVideoElement] - Optional visible video element to capture from directly.
  * @returns {string|null} Raw base64 JPEG string without data: prefix, or null on failure.
  */
-export function captureFrame() {
-  if (!isCameraActive() || !hiddenVideoElement) {
+export function captureFrame(customVideoElement = null) {
+  const targetVideo = customVideoElement || hiddenVideoElement;
+  if (!isCameraActive() || !targetVideo) {
     return null;
   }
 
   // Video must have valid frames ready
-  if (hiddenVideoElement.readyState < 2) {
+  if (targetVideo.readyState < 2) {
     return null;
   }
 
-  const srcWidth = hiddenVideoElement.videoWidth;
-  const srcHeight = hiddenVideoElement.videoHeight;
+  const srcWidth = targetVideo.videoWidth;
+  const srcHeight = targetVideo.videoHeight;
 
   if (!srcWidth || !srcHeight) {
     return null;
