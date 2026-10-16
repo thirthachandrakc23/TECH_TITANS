@@ -1,11 +1,16 @@
 /**
- * DigitalVision — Accessible Surroundings & Vision Assistant
+ * DigitalVision — Accessible Voice-First Assistive Vision Hub
  *
  * Real working frontend for visually impaired users.
- * Combines high-contrast mobile-first UI, Web Speech API announcements,
- * live camera feed (with front/back camera support & mirroring),
- * real-time browser-based TensorFlow.js COCO-SSD object/face detection,
- * and backend multimodal AI integration.
+ * Driven entirely by voice commands:
+ * - Assistant directly invites conversation upon opening
+ * - No buttons needed to choose options; the user's voice selects and activates modes
+ * - Free in-browser SpeechRecognition + SpeechSynthesis + Web Audio API cues
+ * - Book Reading Mode: Free in-browser Tesseract OCR reading pages aloud
+ * - Navigation Mode: Place-to-place directional walking guidance with obstacle avoidance
+ * - Surroundings Description Mode: Multi-frame scene scanning with TensorFlow.js COCO-SSD
+ * - Object & Washroom Finder Modes
+ * - Global hands-free voice control ("read book", "navigate to kitchen", "stop", "help")
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -13,6 +18,7 @@ import {
   startCamera,
   stopCamera,
   getVideoStream,
+  isCameraActive,
 } from '../camera/cameraService.js';
 import {
   loadDetectionModel,
@@ -20,289 +26,434 @@ import {
   isModelReady,
 } from '../services/detectionService.js';
 import {
+  startListening,
+  stopListening,
   speak,
   stopSpeaking,
   playAudioCue,
   triggerHaptic,
-  formatAggregatedScanDescription,
-} from '../services/speechService.js';
+  initWaveform,
+} from '../audio/audioService.js';
+import { interpretVoiceCommand } from '../services/localIntentService.js';
+import { readBookPage } from '../services/bookReaderService.js';
+import { evaluateNavigationGuidance } from '../services/navigationService.js';
+import { formatAggregatedScanDescription } from '../services/speechService.js';
+import {
+  DESCRIBE_SURROUNDINGS,
+  READ_TEXT,
+  FIND_OBJECT,
+  FIND_WASHROOM,
+  NAVIGATE_HELP,
+  OBSTACLE_CHECK,
+  STOP,
+  REPEAT,
+  HELP,
+  CHAT,
+} from '../core/intents.js';
 
-const WELCOME_SPEECH =
-  'Welcome to DigitalVision. Tap anywhere on your screen to activate the camera and understand your surroundings.';
+const INITIAL_WELCOME =
+  'Welcome to DigitalVision. I am your voice assistant, and I am listening. Tell me what you would like to do — such as navigate to a room, read a book, describe your surroundings, or find an object.';
 
 export default function HomePage() {
+  // Voice & Conversation States
+  const [voiceState, setVoiceState] = useState('idle'); // 'idle' | 'listening' | 'processing' | 'speaking'
+  const [activeMode, setActiveMode] = useState('conversation'); // 'conversation' | 'navigating' | 'reading' | 'scanning' | 'searching'
+  const [userTranscript, setUserTranscript] = useState('');
+  const [assistantSpeech, setAssistantSpeech] = useState(INITIAL_WELCOME);
+  const [hasStartedVoice, setHasStartedVoice] = useState(false);
+
+  // Camera & Detection States
   const [cameraActive, setCameraActive] = useState(false);
-  const [cameraStarting, setCameraStarting] = useState(false);
-  const [cameraError, setCameraError] = useState(null);
-  const [facingMode, setFacingMode] = useState('user'); // Default to front camera
-
-  const [modelLoading, setModelLoading] = useState(() => !isModelReady());
-  const [modelError, setModelError] = useState(null);
-
+  const [facingMode, setFacingMode] = useState('environment'); // default to rear surroundings camera for assistive use
   const [detectedObjects, setDetectedObjects] = useState([]);
-  const [lastSpoken, setLastSpoken] = useState(
-    'Tap anywhere on the screen to activate the camera and understand your surroundings.'
-  );
-  // 5-Second Surroundings Scan Engine State
-  const [scanPhase, setScanPhase] = useState('idle'); // 'idle' | 'scanning' | 'speaking' | 'paused' | 'ready'
-  const [scanCountdown, setScanCountdown] = useState(5);
-  const [autoScanEnabled, _setAutoScanEnabled] = useState(true);
+  const [modelLoading, setModelLoading] = useState(() => !isModelReady());
 
+  // Book Reader States
+  const [bookText, setBookText] = useState('');
+  const [isReadingPage, setIsReadingPage] = useState(false);
+
+  // Navigation States
+  const [navDestination, setNavDestination] = useState('');
+  const [navAdvice, setNavAdvice] = useState('Checking walking path...');
+  const [navDirection, setNavDirection] = useState('straight');
+  const [navUrgent, setNavUrgent] = useState(false);
+
+  // Surroundings Scan States
+  const [scanCountdown, setScanCountdown] = useState(5);
+  const [scanPhase, setScanPhase] = useState('idle');
+
+  // Object Finder State
+  const [searchTarget, setSearchTarget] = useState('');
+
+  // DOM Refs
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const animFrameRef = useRef(null);
+  const waveformCanvasRef = useRef(null);
+  const handleVoiceCommandRef = useRef(null);
   const isDetectingRef = useRef(false);
   const lastDetectionTimeRef = useRef(0);
+  const lastNavAdviceTimeRef = useRef(0);
+  const isNavigatingRef = useRef(false);
+  const isReadingRef = useRef(false);
   const hasSpokenWelcomeRef = useRef(false);
 
-  // 10-Second Scan Accumulator Refs
+  // Multi-frame Scan Accumulators
   const scanAccumulatorRef = useRef(new Map());
   const scanFramesCountRef = useRef(0);
   const scanTimerRef = useRef(null);
-  const pauseTimerRef = useRef(null);
-  const scanPhaseRef = useRef('idle');
-  const autoScanEnabledRef = useRef(true);
-  const cameraActiveRef = useRef(false);
 
-  // Keep ref sync with state for rAF and timers
+  // Bind video stream to element
+  const bindStream = useCallback((el) => {
+    const video = el || videoRef.current;
+    if (!video) return;
+    const stream = getVideoStream();
+    if (stream && video.srcObject !== stream) {
+      video.srcObject = stream;
+      video.muted = true;
+      video.defaultMuted = true;
+      video.play().catch(() => {});
+    }
+  }, []);
+
+  // Initialize Waveform Canvas visualizer
   useEffect(() => {
-    scanPhaseRef.current = scanPhase;
-  }, [scanPhase]);
+    let cleanup = null;
+    if (waveformCanvasRef.current) {
+      waveformCanvasRef.current.width = 480;
+      waveformCanvasRef.current.height = 60;
+      cleanup = initWaveform(waveformCanvasRef.current);
+    }
+    return () => {
+      if (cleanup) cleanup();
+    };
+  }, []);
 
+  // Preload COCO-SSD detection model in background
   useEffect(() => {
-    autoScanEnabledRef.current = autoScanEnabled;
-  }, [autoScanEnabled]);
+    if (!isModelReady()) {
+      loadDetectionModel()
+        .then(() => setModelLoading(false))
+        .catch(() => setModelLoading(false));
+    }
+  }, []);
 
-  useEffect(() => {
-    cameraActiveRef.current = cameraActive;
-  }, [cameraActive]);
+  // Voice Interaction & Autonomous Welcoming
+  const startVoiceConversation = useCallback(async () => {
+    setHasStartedVoice(true);
+    setVoiceState('speaking');
 
-  // Play welcome speech on initial page load / after first user gesture (satisfies autoplay policy)
+    // Speak initial welcome announcement hands-free
+    await speak(INITIAL_WELCOME, { interrupt: true });
+
+    // Open microphone and begin hands-free continuous listening loop
+    setVoiceState('listening');
+    startListening({
+      onTranscript: (transcript, isFinal) => {
+        setUserTranscript(transcript);
+        if (isFinal) {
+          handleVoiceCommandRef.current?.(transcript);
+        }
+      },
+      onStateChange: (state) => {
+        setVoiceState(state);
+      },
+    });
+  }, []);
+
+  // Auto-trigger welcome on load (or fall back to first gesture to satisfy browser autoplay policy)
   useEffect(() => {
     if (hasSpokenWelcomeRef.current) return;
 
-    const triggerWelcome = () => {
+    const triggerOnGesture = () => {
       if (hasSpokenWelcomeRef.current) return;
       hasSpokenWelcomeRef.current = true;
-      speak(WELCOME_SPEECH, { interrupt: false });
-      window.removeEventListener('pointerdown', triggerWelcome);
-      window.removeEventListener('keydown', triggerWelcome);
+      startVoiceConversation();
+      window.removeEventListener('pointerdown', triggerOnGesture);
+      window.removeEventListener('keydown', triggerOnGesture);
     };
 
-    // Attempt immediate speech (works in browsers that permit synthesis on load)
-    speak(WELCOME_SPEECH, { interrupt: false })
+    // Attempt direct speech (supported by some browsers)
+    speak(INITIAL_WELCOME, { interrupt: false })
       .then(() => {
         hasSpokenWelcomeRef.current = true;
+        setHasStartedVoice(true);
+        startListening({
+          onTranscript: (transcript, isFinal) => {
+            setUserTranscript(transcript);
+            if (isFinal) handleVoiceCommandRef.current?.(transcript);
+          },
+          onStateChange: (state) => setVoiceState(state),
+        });
       })
       .catch(() => {
-        // Fall back to first interaction listener if autoplay is restricted
+        // Fall back to first interaction gesture
       });
 
-    window.addEventListener('pointerdown', triggerWelcome, { once: true });
-    window.addEventListener('keydown', triggerWelcome, { once: true });
+    window.addEventListener('pointerdown', triggerOnGesture, { once: true });
+    window.addEventListener('keydown', triggerOnGesture, { once: true });
 
     return () => {
-      window.removeEventListener('pointerdown', triggerWelcome);
-      window.removeEventListener('keydown', triggerWelcome);
+      window.removeEventListener('pointerdown', triggerOnGesture);
+      window.removeEventListener('keydown', triggerOnGesture);
+      stopListening();
       stopSpeaking();
     };
-  }, []);
+  }, [startVoiceConversation]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Preload detection model in background on initial page mount so detection is instant
-  useEffect(() => {
-    let isCancelled = false;
-
-    if (!isModelReady()) {
-      loadDetectionModel()
-        .then(() => {
-          if (!isCancelled) {
-            setModelLoading(false);
-          }
-        })
-        .catch((err) => {
-          if (!isCancelled) {
-            setModelLoading(false);
-            console.warn('[DigitalVision] Model background preload notice:', err);
-          }
-        });
+  // Turn on device camera
+  const activateCamera = useCallback(async (facing = 'environment') => {
+    if (isCameraActive()) {
+      bindStream();
+      return true;
     }
+    const success = await startCamera({ facingMode: facing });
+    if (success) {
+      setCameraActive(true);
+      setTimeout(() => bindStream(), 60);
+    }
+    return success;
+  }, [bindStream]);
 
-    return () => {
-      isCancelled = true;
-    };
+  // Turn off device camera
+  const deactivateCamera = useCallback(() => {
+    stopCamera();
+    setCameraActive(false);
+    if (videoRef.current) videoRef.current.srcObject = null;
+    if (canvasRef.current) {
+      const ctx = canvasRef.current.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+    }
   }, []);
 
-  // Bind media stream to visible video element reliably
-  const bindStreamToVideo = useCallback((targetEl) => {
-    const el = targetEl || videoRef.current;
-    if (!el) return;
+  // 1. EXECUTE: BOOK READING MODE
+  const executeBookReadingMode = useCallback(async () => {
+    setActiveMode('reading');
+    isReadingRef.current = true;
+    isNavigatingRef.current = false;
+    setBookText('Hold book or page steady in front of camera...');
 
-    const stream = getVideoStream();
-    if (stream) {
-      if (el.srcObject !== stream) {
-        el.srcObject = stream;
+    await activateCamera('environment');
+
+    const promptText =
+      'Book reading mode active. Please hold your book or page steady in front of the camera. Reading now...';
+    setAssistantSpeech(promptText);
+    await speak(promptText, { interrupt: true });
+
+    // Give user 1.2s to align page
+    setTimeout(async () => {
+      if (!isReadingRef.current) return;
+
+      setIsReadingPage(true);
+      playAudioCue('book_snap');
+      triggerHaptic([60, 40, 60]);
+
+      const result = await readBookPage(videoRef.current);
+      setIsReadingPage(false);
+
+      if (result.success && result.text) {
+        setBookText(result.text);
+        const speechOutput = `Reading page. ${result.text}. Finished reading page. Say read next page, or say stop.`;
+        setAssistantSpeech(speechOutput);
+        await speak(speechOutput, { interrupt: true });
+      } else {
+        const retryMsg =
+          'No clear text detected. Please bring the book slightly closer, hold the page flat, and say read page again.';
+        setAssistantSpeech(retryMsg);
+        await speak(retryMsg, { interrupt: true });
       }
-      el.muted = true;
-      el.defaultMuted = true;
-      el.play().catch((err) => {
-        console.warn('[DigitalVision] Video playback notice:', err);
-      });
-    }
-  }, []);
+    }, 1200);
+  }, [activateCamera]);
 
-  // Re-bind stream whenever cameraActive state changes
-  useEffect(() => {
-    if (cameraActive) {
-      bindStreamToVideo();
-    }
-  }, [cameraActive, bindStreamToVideo]);
+  // 2. EXECUTE: NAVIGATION MODE
+  const executeNavigationMode = useCallback(async (destination = '') => {
+    setActiveMode('navigating');
+    isNavigatingRef.current = true;
+    isReadingRef.current = false;
+    setNavDestination(destination);
+    setNavAdvice('Scanning corridor and obstacles ahead...');
 
-  // Cleanup camera, animations, and speech on unmount
-  useEffect(() => {
-    return () => {
-      if (animFrameRef.current) {
-        cancelAnimationFrame(animFrameRef.current);
-      }
-      stopCamera();
-      stopSpeaking();
-    };
-  }, []);
+    await activateCamera('environment');
 
-  // Draw bounding boxes on canvas over live camera feed
-  const drawDetections = useCallback((predictions) => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
+    const destMsg = destination
+      ? `Starting navigation guidance for ${destination}. Walk forward slowly. I will guide your path and warn you of obstacles.`
+      : 'Starting place-to-place navigation. Walk forward slowly. I will guide your path and warn you of obstacles.';
 
-    const w = video.videoWidth || 640;
-    const h = video.videoHeight || 480;
+    setAssistantSpeech(destMsg);
+    await speak(destMsg, { interrupt: true });
+  }, [activateCamera]);
 
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
-    }
+  // 3. EXECUTE: SURROUNDINGS SCAN MODE
+  const executeSurroundingsScan = useCallback(async () => {
+    setActiveMode('scanning');
+    isNavigatingRef.current = false;
+    isReadingRef.current = false;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    await activateCamera('environment');
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    for (const pred of predictions) {
-      const [x, y, width, height] = pred.bbox;
-      const isPerson = pred.label.toLowerCase() === 'person';
-
-      // Neon bounding box: emerald green for person/face, cyan for general objects
-      ctx.strokeStyle = isPerson ? '#00ff88' : '#00e5ff';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(x, y, width, height);
-
-      // Label background badge
-      const displayLabel = isPerson ? `👤 Person / Face (${pred.score}%)` : `${pred.label} (${pred.score}%)`;
-      ctx.font = 'bold 16px system-ui, -apple-system, sans-serif';
-      const textWidth = ctx.measureText(displayLabel).width;
-      const tagY = y > 30 ? y - 28 : y;
-
-      ctx.fillStyle = 'rgba(11, 15, 25, 0.9)';
-      ctx.fillRect(x, tagY, textWidth + 16, 26);
-
-      // Label text
-      ctx.fillStyle = isPerson ? '#00ff88' : '#ffffff';
-      ctx.fillText(displayLabel, x + 8, tagY + 18);
-    }
-  }, []);
-
-  const startScanCycleRef = useRef(null);
-
-  // Complete the 5-second scanning cycle and vocalize aggregated summary
-  const finishScanCycle = useCallback(async () => {
-    if (!cameraActiveRef.current) return;
-
-    setScanPhase('speaking');
-    scanPhaseRef.current = 'speaking';
-
-    playAudioCue('complete');
-    triggerHaptic([80, 40, 80]);
-
-    const summary = formatAggregatedScanDescription(
-      scanAccumulatorRef.current,
-      scanFramesCountRef.current
-    );
-
-    setLastSpoken(summary);
-
-    // Speak without being interrupted by frame detections
-    await speak(summary, { interrupt: true });
-
-    // After speech ends, if auto-scan is active, enter quiet pause before next scan
-    if (autoScanEnabledRef.current && cameraActiveRef.current) {
-      setScanPhase('paused');
-      scanPhaseRef.current = 'paused';
-
-      pauseTimerRef.current = setTimeout(() => {
-        if (cameraActiveRef.current && autoScanEnabledRef.current && startScanCycleRef.current) {
-          startScanCycleRef.current();
-        }
-      }, 3000); // 3s quiet time so the user can process what was said
-    } else {
-      setScanPhase('ready');
-      scanPhaseRef.current = 'ready';
-    }
-  }, []);
-
-  // Trigger a full 5-second surroundings scanning cycle
-  const startScanCycle = useCallback(() => {
-    if (!cameraActiveRef.current) return;
-
-    if (scanTimerRef.current) {
-      clearInterval(scanTimerRef.current);
-      scanTimerRef.current = null;
-    }
-    if (pauseTimerRef.current) {
-      clearTimeout(pauseTimerRef.current);
-      pauseTimerRef.current = null;
-    }
+    const startMsg = 'Starting 5-second surroundings scan. Please pan camera slowly around you.';
+    setAssistantSpeech(startMsg);
+    await speak(startMsg, { interrupt: true });
 
     setScanPhase('scanning');
-    scanPhaseRef.current = 'scanning';
     setScanCountdown(5);
     scanAccumulatorRef.current = new Map();
     scanFramesCountRef.current = 0;
 
-    playAudioCue('start');
-    triggerHaptic([60]);
-
     let remaining = 5;
-    scanTimerRef.current = setInterval(() => {
+    if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+
+    scanTimerRef.current = setInterval(async () => {
       remaining -= 1;
       setScanCountdown(remaining);
 
-      // Subtle auditory ticks at 3s and 2s so blind users know scanning is actively underway
       if (remaining === 3 || remaining === 2) {
         playAudioCue('tick');
-        triggerHaptic([30]);
       }
 
       if (remaining <= 0) {
-        if (scanTimerRef.current) {
-          clearInterval(scanTimerRef.current);
-          scanTimerRef.current = null;
-        }
-        finishScanCycle();
+        clearInterval(scanTimerRef.current);
+        scanTimerRef.current = null;
+        setScanPhase('speaking');
+
+        playAudioCue('complete');
+        const summary = formatAggregatedScanDescription(
+          scanAccumulatorRef.current,
+          scanFramesCountRef.current
+        );
+
+        setAssistantSpeech(summary);
+        await speak(summary, { interrupt: true });
+
+        const promptNext = 'Scan complete. What would you like to do next?';
+        setAssistantSpeech(promptNext);
+        await speak(promptNext, { interrupt: false });
+        setActiveMode('conversation');
       }
     }, 1000);
-  }, [finishScanCycle]);
+  }, [activateCamera]);
+
+  // 4. EXECUTE: FIND OBJECT / WASHROOM MODE
+  const executeFindObjectMode = useCallback(async (target) => {
+    setActiveMode('searching');
+    setSearchTarget(target);
+    isNavigatingRef.current = false;
+    isReadingRef.current = false;
+
+    await activateCamera('environment');
+
+    const msg = `Looking for ${target}. Pan camera slowly around the room.`;
+    setAssistantSpeech(msg);
+    await speak(msg, { interrupt: true });
+  }, [activateCamera]);
+
+  // 5. EXECUTE: STOP ALL ACTIVE MODES
+  const executeStop = useCallback(async () => {
+    if (scanTimerRef.current) {
+      clearInterval(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
+    isNavigatingRef.current = false;
+    isReadingRef.current = false;
+
+    deactivateCamera();
+    stopSpeaking();
+
+    setActiveMode('conversation');
+    const stopMsg = 'Stopped. I am listening. What would you like to do next?';
+    setAssistantSpeech(stopMsg);
+    playAudioCue('stop');
+    await speak(stopMsg, { interrupt: true });
+  }, [deactivateCamera]);
+
+  // Handle Classified Voice Commands
+  const handleVoiceCommand = useCallback(async (transcriptText) => {
+    setVoiceState('processing');
+
+    const result = await interpretVoiceCommand(transcriptText);
+    const { intent, params = {}, reply } = result;
+
+    switch (intent) {
+      case STOP: {
+        await executeStop();
+        break;
+      }
+
+      case READ_TEXT: {
+        await executeBookReadingMode();
+        break;
+      }
+
+      case NAVIGATE_HELP: {
+        const dest = params.destination || '';
+        await executeNavigationMode(dest);
+        break;
+      }
+
+      case DESCRIBE_SURROUNDINGS: {
+        await executeSurroundingsScan();
+        break;
+      }
+
+      case FIND_OBJECT: {
+        const target = params.target || 'object';
+        await executeFindObjectMode(target);
+        break;
+      }
+
+      case FIND_WASHROOM: {
+        await executeFindObjectMode('washroom or restroom');
+        break;
+      }
+
+      case OBSTACLE_CHECK: {
+        await executeNavigationMode('obstacle check');
+        break;
+      }
+
+      case REPEAT: {
+        await speak(assistantSpeech, { interrupt: true });
+        break;
+      }
+
+      case HELP:
+      case CHAT: {
+        const responseText =
+          reply ||
+          'I am DigitalVision. You can say: read book, navigate to room, describe surroundings, find an object, or stop.';
+        setAssistantSpeech(responseText);
+        await speak(responseText, { interrupt: true });
+        break;
+      }
+
+      default: {
+        const unknownResponse =
+          reply ||
+          'I heard your command, but I did not recognize that option. You can say: read book, navigate, describe surroundings, or help.';
+        setAssistantSpeech(unknownResponse);
+        await speak(unknownResponse, { interrupt: true });
+        break;
+      }
+    }
+  }, [
+    executeStop,
+    executeBookReadingMode,
+    executeNavigationMode,
+    executeSurroundingsScan,
+    executeFindObjectMode,
+    assistantSpeech,
+  ]);
 
   useEffect(() => {
-    startScanCycleRef.current = startScanCycle;
-  }, [startScanCycle]);
+    handleVoiceCommandRef.current = handleVoiceCommand;
+  }, [handleVoiceCommand]);
 
-  // Continuous frame analysis loop: renders live boxes and accumulates 10s scan data
+  // Frame detection loop: draws boxes, feeds navigation advisor, accumulates scans, searches targets
   useEffect(() => {
     if (!cameraActive) return;
 
     let animId = null;
 
-    const detectFrame = async () => {
+    const processFrame = async () => {
       const video = videoRef.current;
       const now = Date.now();
 
@@ -312,7 +463,7 @@ export default function HomePage() {
         video.videoWidth > 0 &&
         isModelReady() &&
         !isDetectingRef.current &&
-        now - lastDetectionTimeRef.current >= 350
+        now - lastDetectionTimeRef.current >= 300
       ) {
         isDetectingRef.current = true;
         lastDetectionTimeRef.current = now;
@@ -320,448 +471,412 @@ export default function HomePage() {
         try {
           const predictions = await detectObjects(video, 0.35);
           setDetectedObjects(predictions);
-          drawDetections(predictions);
 
-          // If currently in the 10-second scanning phase, accumulate detections across frames!
-          if (scanPhaseRef.current === 'scanning' && predictions.length > 0) {
-            scanFramesCountRef.current += 1;
-            const frameCounts = new Map();
+          // Draw Bounding Boxes on overlay canvas
+          if (canvasRef.current) {
+            const canvas = canvasRef.current;
+            const w = video.videoWidth || 640;
+            const h = video.videoHeight || 480;
 
-            for (const pred of predictions) {
-              frameCounts.set(pred.label, (frameCounts.get(pred.label) || 0) + 1);
-
-              let entry = scanAccumulatorRef.current.get(pred.label);
-              if (!entry) {
-                entry = {
-                  frameCount: 0,
-                  maxCountInFrame: 0,
-                  locations: new Map(),
-                  maxScore: 0,
-                };
-                scanAccumulatorRef.current.set(pred.label, entry);
-              }
-
-              entry.frameCount += 1;
-              entry.maxScore = Math.max(entry.maxScore, pred.score);
-              const locCount = entry.locations.get(pred.location) || 0;
-              entry.locations.set(pred.location, locCount + 1);
+            if (canvas.width !== w || canvas.height !== h) {
+              canvas.width = w;
+              canvas.height = h;
             }
 
-            for (const [lbl, cnt] of frameCounts.entries()) {
-              const entry = scanAccumulatorRef.current.get(lbl);
-              if (entry) {
-                entry.maxCountInFrame = Math.max(entry.maxCountInFrame, cnt);
+            const ctx = canvas.getContext('2d');
+            if (ctx) {
+              ctx.clearRect(0, 0, w, h);
+
+              // Draw navigation corridor guides if in navigation mode
+              if (isNavigatingRef.current) {
+                ctx.strokeStyle = 'rgba(56, 189, 248, 0.35)';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([8, 8]);
+                ctx.beginPath();
+                ctx.moveTo(w * 0.33, 0);
+                ctx.lineTo(w * 0.33, h);
+                ctx.moveTo(w * 0.67, 0);
+                ctx.lineTo(w * 0.67, h);
+                ctx.stroke();
+                ctx.setLineDash([]);
+              }
+
+              for (const pred of predictions) {
+                const [x, y, width, height] = pred.bbox;
+                const isPerson = pred.label.toLowerCase() === 'person';
+
+                ctx.strokeStyle = isPerson ? '#00ff88' : '#00e5ff';
+                ctx.lineWidth = 4;
+                ctx.strokeRect(x, y, width, height);
+
+                const labelText = `${pred.label} (${pred.score}%)`;
+                ctx.font = 'bold 16px system-ui, sans-serif';
+                const tagW = ctx.measureText(labelText).width + 16;
+                const tagY = y > 30 ? y - 28 : y;
+
+                ctx.fillStyle = 'rgba(11, 15, 25, 0.9)';
+                ctx.fillRect(x, tagY, tagW, 26);
+
+                ctx.fillStyle = isPerson ? '#00ff88' : '#ffffff';
+                ctx.fillText(labelText, x + 8, tagY + 18);
               }
             }
           }
-          // NOTICE: NO speak() calls here! Speech is triggered ONLY by the 10s scan aggregation.
-          // This completely prevents overlapping, stuttering, and voice jitter!
+
+          // 1. Navigation Mode Real-Time Evaluation
+          if (isNavigatingRef.current && now - lastNavAdviceTimeRef.current >= 3200) {
+            lastNavAdviceTimeRef.current = now;
+
+            const guidance = evaluateNavigationGuidance(
+              predictions,
+              video.videoWidth,
+              video.videoHeight,
+              navDestination
+            );
+
+            setNavAdvice(guidance.spokenAdvice);
+            setNavDirection(guidance.direction);
+            setNavUrgent(guidance.isUrgent);
+
+            playAudioCue('nav_ping');
+            if (guidance.isUrgent) {
+              playAudioCue('warning');
+              triggerHaptic([100, 50, 100]);
+            }
+
+            speak(guidance.spokenAdvice, { interrupt: guidance.isUrgent });
+          }
+
+          // 2. Surroundings Scan Accumulation
+          if (scanPhase === 'scanning' && predictions.length > 0) {
+            scanFramesCountRef.current += 1;
+            for (const pred of predictions) {
+              let entry = scanAccumulatorRef.current.get(pred.label);
+              if (!entry) {
+                entry = { frameCount: 0, maxCountInFrame: 0, locations: new Map(), maxScore: 0 };
+                scanAccumulatorRef.current.set(pred.label, entry);
+              }
+              entry.frameCount += 1;
+              entry.maxScore = Math.max(entry.maxScore, pred.score);
+              const loc = pred.location || 'center';
+              entry.locations.set(loc, (entry.locations.get(loc) || 0) + 1);
+            }
+          }
+
+          // 3. Object / Target Search Mode
+          if (activeMode === 'searching' && searchTarget) {
+            const matched = predictions.find((p) =>
+              p.label.toLowerCase().includes(searchTarget.toLowerCase())
+            );
+            if (matched && now - lastNavAdviceTimeRef.current >= 4000) {
+              lastNavAdviceTimeRef.current = now;
+              playAudioCue('complete');
+              triggerHaptic([80, 50, 80]);
+              const foundMsg = `Found ${matched.label} on your ${matched.location}!`;
+              setAssistantSpeech(foundMsg);
+              speak(foundMsg, { interrupt: true });
+            }
+          }
         } catch (err) {
-          console.warn('[DigitalVision] Detection frame error:', err);
+          console.warn('[DigitalVision] Frame processing error:', err);
         } finally {
           isDetectingRef.current = false;
         }
       }
 
-      animId = requestAnimationFrame(detectFrame);
+      animId = requestAnimationFrame(processFrame);
     };
 
-    animId = requestAnimationFrame(detectFrame);
-
+    animId = requestAnimationFrame(processFrame);
     return () => {
-      if (animId) {
-        cancelAnimationFrame(animId);
-      }
+      if (animId) cancelAnimationFrame(animId);
     };
-  }, [cameraActive, drawDetections]);
+  }, [cameraActive, scanPhase, activeMode, searchTarget, navDestination]);
 
-  // Handle Start Camera & Surroundings Detection
-  const handleStartDetection = async (chosenFacingMode) => {
-    const targetFacing = chosenFacingMode || facingMode;
-    setCameraStarting(true);
-    setCameraError(null);
-    setModelError(null);
+  // Flip Camera between front & rear
+  const handleFlipCamera = async () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextFacing);
+    await startCamera({ facingMode: nextFacing });
+    setTimeout(() => bindStream(), 50);
+    speak(nextFacing === 'user' ? 'Switched to front camera.' : 'Switched to rear surroundings camera.');
+  };
 
-    // Stop previous stream to guarantee clean renegotiation
-    stopCamera();
-
-    const success = await startCamera({ facingMode: targetFacing });
-
-    if (!success) {
-      setCameraStarting(false);
-      const errMsg =
-        'Camera permission was denied or no camera device is available. Please check browser permissions and allow camera access.';
-      setCameraError(errMsg);
-      speak(errMsg);
+  // Screen Tap / Key gesture handler: interrupts speech and triggers voice listening
+  const handleScreenInteraction = () => {
+    if (activeMode !== 'conversation') {
+      executeStop();
       return;
     }
 
-    setCameraActive(true);
-    cameraActiveRef.current = true;
-    setCameraStarting(false);
+    if (voiceState === 'speaking') {
+      stopSpeaking();
+      setVoiceState('listening');
+      startListening({
+        onTranscript: (t, isFinal) => {
+          setUserTranscript(t);
+          if (isFinal) handleVoiceCommand(t);
+        },
+        onStateChange: (s) => setVoiceState(s),
+      });
+      return;
+    }
 
-    // Ensure video element receives stream as soon as mounted
-    setTimeout(() => {
-      bindStreamToVideo();
-    }, 50);
-
-    // Load pretrained COCO-SSD model if not yet loaded
-    if (!isModelReady()) {
-      try {
-        setModelLoading(true);
-        speak('Camera active. Loading AI detection model.');
-        await loadDetectionModel();
-        setModelLoading(false);
-        await speak('AI detection ready. Starting 5-second surroundings scan.');
-        if (cameraActiveRef.current && startScanCycleRef.current) {
-          startScanCycleRef.current();
-        }
-      } catch (err) {
-        setModelLoading(false);
-        const errText = `Detection model could not be loaded: ${err.message || 'Network error'}. Live camera feed is active.`;
-        setModelError(errText);
-        speak(errText);
-      }
+    if (!hasStartedVoice) {
+      startVoiceConversation();
     } else {
-      speak(
-        targetFacing === 'user'
-          ? 'Front camera active. Starting 5-second surroundings scan.'
-          : 'Surroundings camera active. Starting 5-second scan. Move camera slowly.'
-      );
-      setTimeout(() => {
-        if (cameraActiveRef.current && startScanCycleRef.current) {
-          startScanCycleRef.current();
-        }
-      }, 1500);
+      playAudioCue('listen_start');
+      setVoiceState('listening');
+      startListening({
+        onTranscript: (t, isFinal) => {
+          setUserTranscript(t);
+          if (isFinal) handleVoiceCommand(t);
+        },
+        onStateChange: (s) => setVoiceState(s),
+      });
     }
-  };
-
-  // Flip Camera between front and rear
-  const handleFlipCamera = async () => {
-    const nextMode = facingMode === 'user' ? 'environment' : 'user';
-    setFacingMode(nextMode);
-    if (cameraActive) {
-      setCameraStarting(true);
-      await startCamera({ facingMode: nextMode });
-      setCameraStarting(false);
-      setTimeout(() => bindStreamToVideo(), 50);
-      speak(nextMode === 'user' ? 'Switched to front camera.' : 'Switched to rear camera.');
-      setTimeout(() => {
-        if (cameraActiveRef.current && startScanCycleRef.current) {
-          startScanCycleRef.current();
-        }
-      }, 1200);
-    }
-  };
-
-  // Handle Stop Camera — triggered by tapping anywhere on the active camera screen
-  const handleStopCamera = () => {
-    if (scanTimerRef.current) {
-      clearInterval(scanTimerRef.current);
-      scanTimerRef.current = null;
-    }
-    if (pauseTimerRef.current) {
-      clearTimeout(pauseTimerRef.current);
-      pauseTimerRef.current = null;
-    }
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current);
-      animFrameRef.current = null;
-    }
-
-    setScanPhase('idle');
-    scanPhaseRef.current = 'idle';
-    cameraActiveRef.current = false;
-
-    stopCamera();
-    stopSpeaking();
-
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    if (canvasRef.current) {
-      const ctx = canvasRef.current.getContext('2d');
-      if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-    }
-
-    setCameraActive(false);
-    setDetectedObjects([]);
-    const stopMsg = 'Describing stopped. Tap anywhere on the screen to start again.';
-    setLastSpoken(stopMsg);
-    speak(stopMsg);
   };
 
   return (
-    <div className="app-container">
-      <a href="#main-action" className="skip-link">
-        Skip to main action
+    <div
+      className="app-container"
+      onClick={handleScreenInteraction}
+      role="region"
+      aria-label="DigitalVision Voice-Controlled Assistive Assistant"
+    >
+      <a href="#main-content" className="skip-link">
+        Skip to main content
       </a>
 
-      {/* Semantic Top-Level Heading for Screen Readers */}
-      <h1 className="sr-only">DigitalVision - Assistive Surroundings Aid</h1>
+      {/* Semantic Top-Level Heading */}
+      <header className="app-header">
+        <h1 className="app-title">DigitalVision</h1>
+      </header>
 
-      {/* Header — shown during active camera scanning */}
-      {cameraActive && (
-        <header className="app-header">
-          <h1 className="app-title">DigitalVision</h1>
-        </header>
-      )}
-
-      {/* Main Interactive Region */}
       <main className="app-main" id="main-content">
-        {/* Error Banners */}
-        {cameraError && (
-          <div className="alert-card error" role="alert" aria-live="assertive">
-            <span aria-hidden="true" style={{ fontSize: '1.4rem' }}>
-              ⚠️
-            </span>
-            <div>
-              <strong>Camera Access Notice:</strong> {cameraError}
-              <div style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}>
-                Tip: Click the camera / lock icon in your browser address bar to allow camera access, then try again.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {modelError && (
-          <div className="alert-card warning" role="alert" aria-live="polite">
-            <span aria-hidden="true" style={{ fontSize: '1.4rem' }}>
-              ⚠️
-            </span>
-            <div>
-              <strong>Model Notice:</strong> {modelError}
-            </div>
-          </div>
-        )}
-
-        {/* Dynamic State: Clean Rectangular Column vs Active Camera */}
-        {!cameraActive ? (
+        {/* Voice Assistant Hub (No manual option buttons; purely voice-driven) */}
+        <section
+          className={`voice-assistant-hub ${voiceState} ${activeMode}`}
+          aria-live="polite"
+          role="region"
+          aria-label="Voice conversation assistant"
+        >
+          {/* Glowing Animated Microphone Orb */}
           <div
-            id="main-action"
-            className="tap-to-start-screen"
-            role="button"
-            tabIndex={0}
-            onClick={() => !cameraStarting && handleStartDetection(facingMode)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
-                e.preventDefault();
-                if (!cameraStarting) handleStartDetection(facingMode);
-              }
-            }}
-            aria-label="Tap anywhere on the screen to start surroundings detection"
+            className={`mic-glow-orb ${voiceState} ${activeMode}`}
+            aria-hidden="true"
           >
-            <div className="tap-prompt-container">
-              <div className="tap-prompt-icon" aria-hidden="true">
-                👆
-              </div>
-              <h2 className="tap-prompt-title">
-                {cameraStarting ? 'Starting Camera...' : 'Tap Anywhere to Start'}
-              </h2>
-              <p className="tap-prompt-subtitle">
-                {cameraStarting || modelLoading
-                  ? 'Accessing camera and loading model...'
-                  : 'Touch or click anywhere on the screen to begin'}
-              </p>
-            </div>
+            {activeMode === 'reading'
+              ? '📖'
+              : activeMode === 'navigating'
+              ? '🧭'
+              : activeMode === 'scanning'
+              ? '👁️'
+              : voiceState === 'listening'
+              ? '🎙️'
+              : voiceState === 'speaking'
+              ? '🗣️'
+              : '✨'}
           </div>
-        ) : (
-          <div
-            className="camera-active-container"
-            onClick={handleStopCamera}
-            role="region"
-            aria-label="Active camera view. Tap anywhere on screen or camera feed to stop describing and return to the main interface."
-          >
-            {/* Tap Anywhere to Stop Banner */}
-            <div className="tap-to-stop-banner" aria-hidden="true">
-              <span>Tap anywhere on screen to stop describing</span>
-            </div>
 
-            {/* 5-Second Surroundings Scan Status & Progress Card */}
-            <div
-              className="scan-status-card"
-              role="region"
-              aria-label="5-second surroundings scan progress"
-            >
-              <div className="scan-status-header">
-                <div
-                  className={`scan-badge ${scanPhase}`}
-                  role="status"
-                  aria-live="polite"
-                >
-                  <span>
-                    {scanPhase === 'scanning'
-                      ? `Scanning surroundings: ${scanCountdown}s remaining...`
-                      : scanPhase === 'speaking'
-                      ? 'Describing surroundings aloud...'
-                      : scanPhase === 'paused'
-                      ? 'Quiet pause (preparing next scan)...'
-                      : 'Ready for 5-second scan'}
-                  </span>
-                </div>
-
-                {scanPhase === 'scanning' && (
-                  <span className="scan-countdown-text" aria-hidden="true">
-                    {scanCountdown}s
-                  </span>
-                )}
-              </div>
-
-              {/* Accessible High-Contrast Progress Bar */}
-              <div
-                className="scan-progress-container"
-                role="progressbar"
-                aria-valuenow={scanPhase === 'scanning' ? 5 - scanCountdown : 5}
-                aria-valuemin={0}
-                aria-valuemax={5}
-                aria-label={`Surroundings scan ${scanPhase === 'scanning' ? `${5 - scanCountdown} of 5 seconds` : scanPhase}`}
-              >
-                <div
-                  className={`scan-progress-bar ${scanPhase === 'speaking' ? 'speaking' : ''}`}
-                  style={{
-                    width:
-                      scanPhase === 'scanning'
-                        ? `${((5 - scanCountdown) / 5) * 100}%`
-                        : scanPhase === 'speaking'
-                        ? '100%'
-                        : '0%',
-                  }}
-                ></div>
-              </div>
-            </div>
-
-            {/* Live Camera Feed & Canvas Overlay (Tappable to Stop) */}
-            <div
-              className="camera-card"
-              role="button"
-              tabIndex={0}
-              onClick={handleStopCamera}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar' || e.key === 'Escape') {
-                  e.preventDefault();
-                  handleStopCamera();
-                }
-              }}
-              aria-label="Live camera feed. Tap here or anywhere on the screen to stop describing and return to the main interface."
-            >
-              <div className="camera-status-pill">
-                <span className="indicator-dot" aria-hidden="true"></span>
-                <span>
-                  {modelLoading
-                    ? 'Loading AI Model...'
-                    : `Live: ${facingMode === 'user' ? 'Front (Face)' : 'Rear (Surroundings)'} (${detectedObjects.length} in view)`}
-                </span>
-              </div>
-
-              <div className="camera-tap-hint" aria-hidden="true">
-                <span>Tap to Stop</span>
-              </div>
-
-              <video
-                ref={(el) => {
-                  videoRef.current = el;
-                  if (el && cameraActive) {
-                    bindStreamToVideo(el);
-                  }
-                }}
-                onLoadedMetadata={() => bindStreamToVideo()}
-                onCanPlay={() => bindStreamToVideo()}
-                className={`camera-video ${facingMode === 'user' ? 'mirrored' : ''}`}
-                autoPlay
-                playsInline
-                muted
-                aria-label="Camera live preview"
-              ></video>
-
-              <canvas
-                ref={canvasRef}
-                className={`camera-overlay ${facingMode === 'user' ? 'mirrored' : ''}`}
-                aria-hidden="true"
-              ></canvas>
-            </div>
-
-            {/* Camera Flip Button */}
-            <div
-              className="controls-row"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                className="btn btn-flip"
-                onClick={handleFlipCamera}
-                disabled={cameraStarting}
-                aria-label={`Switch to ${facingMode === 'user' ? 'rear camera' : 'front camera'}`}
-              >
-                {facingMode === 'user' ? 'Switch to Rear Camera' : 'Switch to Front Camera'}
-              </button>
-            </div>
-
-            {/* Live Detections List */}
-            {detectedObjects.length > 0 && (
-              <section
-                className="detections-panel"
-                aria-labelledby="detections-title"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="detections-heading">
-                  <h3 id="detections-title">Detected Objects & People in View</h3>
-                  <span className="location-pill">Real-Time AI</span>
-                </div>
-                <div className="detections-grid">
-                  {detectedObjects.map((obj, idx) => {
-                    const isPerson = obj.label.toLowerCase() === 'person';
-                    return (
-                      <div
-                        className="detection-chip"
-                        key={`${obj.label}-${idx}`}
-                        style={
-                          isPerson
-                            ? { borderColor: '#00ff88', boxShadow: '0 0 10px rgba(0,255,136,0.2)' }
-                            : {}
-                        }
-                      >
-                        <span className="chip-label">
-                          {isPerson ? '👤 Person / Face' : obj.label}
-                        </span>
-                        <div className="chip-meta">
-                          <span>Confidence: {obj.score}%</span>
-                          <span className="location-pill">{obj.location}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
+          {/* Mode Status Pill */}
+          <div className={`voice-mode-badge ${voiceState} ${activeMode}`}>
+            <span className="indicator-dot" aria-hidden="true"></span>
+            <span>
+              {activeMode === 'reading'
+                ? '📖 Book Reading Active'
+                : activeMode === 'navigating'
+                ? `🧭 Navigation Active: ${navDestination || 'Walking Guidance'}`
+                : activeMode === 'scanning'
+                ? `👁️ Scanning Surroundings (${scanCountdown}s)`
+                : activeMode === 'searching'
+                ? `🔍 Searching for: ${searchTarget}`
+                : voiceState === 'listening'
+                ? '🎙️ Listening to Your Voice...'
+                : voiceState === 'processing'
+                ? '⚙️ Understanding Command...'
+                : voiceState === 'speaking'
+                ? '💬 Speaking...'
+                : '✨ Voice Ready — Speak Anytime'}
+            </span>
           </div>
-        )}
 
-        {/* Live Spoken Caption Banner — visible during active camera scanning */}
-        {cameraActive && (
+          {/* Prompt Title */}
+          <h2 className="voice-prompt-title">
+            {activeMode === 'reading'
+              ? 'Reading Book / Document'
+              : activeMode === 'navigating'
+              ? 'Walking Navigation Guidance'
+              : voiceState === 'listening'
+              ? "I'm Listening. What Do You Need?"
+              : 'Talk Directly with Your Voice'}
+          </h2>
+
+          <p className="voice-prompt-hint">
+            {activeMode === 'reading'
+              ? 'Hold book or document flat in front of camera. Say "read page", "read next page", or "stop".'
+              : activeMode === 'navigating'
+              ? 'Walk forward slowly. I will announce clear corridors and warning hazards. Say "stop" anytime.'
+              : 'No buttons needed. Just say: "read book", "navigate to kitchen", "describe surroundings", or "find keys".'}
+          </p>
+
+          {/* Live Waveform Audio Visualizer Canvas */}
+          <div className="waveform-box" aria-hidden="true">
+            <canvas ref={waveformCanvasRef} className="waveform-canvas"></canvas>
+          </div>
+
+          {/* Live User Voice Transcript Bubble */}
+          {userTranscript && (
+            <div className="user-transcript-bubble" role="status" aria-label="What you said">
+              <span className="transcript-speaker-icon" aria-hidden="true">
+                🗣️
+              </span>
+              <div className="transcript-content">
+                <div className="transcript-title">You Said</div>
+                <div className="transcript-text">"{userTranscript}"</div>
+              </div>
+            </div>
+          )}
+
+          {/* Tap-Anywhere Accessibility Notice */}
+          <div className="tap-to-talk-helper" aria-hidden="true">
+            <span>👆 Tap anywhere on screen to speak, interrupt, or stop</span>
+          </div>
+        </section>
+
+        {/* Live Active Navigation Guidance Card */}
+        {activeMode === 'navigating' && (
           <section
-            className="caption-banner"
-            aria-live="polite"
-            role="status"
-            aria-label="Spoken surroundings description"
+            className={`nav-guidance-card ${navUrgent ? 'urgent' : ''}`}
+            aria-live="assertive"
+            role="alert"
           >
-            <span className="caption-icon" aria-hidden="true">
-              💬
-            </span>
-            <div className="caption-text">{lastSpoken}</div>
+            <div className="nav-header">
+              <span className="nav-destination-pill">
+                Destination: {navDestination || 'Open Path'}
+              </span>
+              <span className="location-pill">
+                {navUrgent ? '⚠️ HAZARD ALERT' : 'GUIDED CORRIDOR'}
+              </span>
+            </div>
+
+            <div className="nav-direction-arrow">
+              <span>
+                {navDirection === 'straight'
+                  ? '⬆️ Straight Ahead'
+                  : navDirection === 'left'
+                  ? '⬅️ Steer Left'
+                  : navDirection === 'right'
+                  ? '➡️ Steer Right'
+                  : '🛑 Stop & Step Aside'}
+              </span>
+            </div>
+
+            <div className="nav-advice-text">{navAdvice}</div>
           </section>
         )}
+
+        {/* Live Book Reading OCR Display Card */}
+        {activeMode === 'reading' && (
+          <section
+            className="book-reading-card"
+            aria-live="polite"
+            role="region"
+            aria-label="Book page reader"
+          >
+            <div className="book-reading-header">
+              <div className="book-reading-title">
+                <span>📖</span>
+                <span>{isReadingPage ? 'Reading page text...' : 'Page Content'}</span>
+              </div>
+              <span className="location-pill">Tesseract Free OCR</span>
+            </div>
+
+            <div className="book-text-display">
+              {bookText || 'Position page in front of camera lens...'}
+            </div>
+          </section>
+        )}
+
+        {/* Live Camera View Card (Displayed whenever camera is active) */}
+        {cameraActive && (
+          <div
+            className="camera-card"
+            style={{ marginTop: '1rem' }}
+            role="region"
+            aria-label="Camera live preview"
+          >
+            <div className="camera-status-pill">
+              <span className="indicator-dot" aria-hidden="true"></span>
+              <span>
+                {modelLoading
+                  ? 'Loading AI...'
+                  : `Camera Active: ${facingMode === 'environment' ? 'Surroundings (Rear)' : 'Front'} (${detectedObjects.length} items in view)`}
+              </span>
+            </div>
+
+            <div className="camera-tap-hint" aria-hidden="true">
+              <span>Tap to Stop</span>
+            </div>
+
+            <video
+              ref={(el) => {
+                videoRef.current = el;
+                if (el && cameraActive) bindStream(el);
+              }}
+              onLoadedMetadata={() => bindStream()}
+              onCanPlay={() => bindStream()}
+              className={`camera-video ${facingMode === 'user' ? 'mirrored' : ''}`}
+              autoPlay
+              playsInline
+              muted
+              aria-label="Camera feed"
+            ></video>
+
+            <canvas
+              ref={canvasRef}
+              className={`camera-overlay ${facingMode === 'user' ? 'mirrored' : ''}`}
+              aria-hidden="true"
+            ></canvas>
+          </div>
+        )}
+
+        {/* Camera Flip Control (Optional helper for companion) */}
+        {cameraActive && (
+          <div className="controls-row" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="btn btn-flip"
+              onClick={handleFlipCamera}
+              aria-label={`Switch to ${facingMode === 'environment' ? 'front camera' : 'rear camera'}`}
+            >
+              Switch to {facingMode === 'environment' ? 'Front Camera' : 'Surroundings Camera'}
+            </button>
+          </div>
+        )}
+
+        {/* Live Spoken Caption Banner */}
+        <section
+          className="caption-banner"
+          aria-live="polite"
+          role="status"
+          aria-label="Assistant spoken reply"
+        >
+          <span className="caption-icon" aria-hidden="true">
+            💬
+          </span>
+          <div className="caption-text">{assistantSpeech}</div>
+        </section>
       </main>
 
-      {/* Footer & Assistive Disclaimer — visible during active camera scanning */}
-      {cameraActive && (
-        <footer className="app-footer">
-          <p>
-            <strong>Assistive Notice:</strong> DigitalVision is an environmental awareness aid. Standard monocular camera feeds cannot measure depth or guarantee collision avoidance. Always use traditional mobility aids.
-          </p>
-          <p style={{ marginTop: '0.25rem', opacity: 0.75 }}>
-            TECH TITANS — HACK ATTACK 2026
-          </p>
-        </footer>
-      )}
+      {/* Footer & Assistive Disclaimer */}
+      <footer className="app-footer">
+        <p>
+          <strong>Assistive Notice:</strong> DigitalVision is an environmental awareness aid. Always use traditional mobility aids like a cane or guide dog.
+        </p>
+        <p style={{ marginTop: '0.25rem', opacity: 0.75 }}>
+          TECH TITANS — HACK ATTACK 2026
+        </p>
+      </footer>
     </div>
   );
 }

@@ -162,22 +162,33 @@ export function matchKeywordIntent(text, lang = 'en-IN') {
     };
   }
 
-  // 8. READ_TEXT
+  // 8. READ_TEXT (including books, pages, documents, signs)
   if (
-    /(read text|read this|what does it say|read the sign|read document|read label|read board|can you read|ocr)/i.test(lower) ||
-    /^(read|text)$/i.test(lower) ||
-    /(ಓದು|oodu|idu oodu|baraha oodu|pathisu|enu baredide)/i.test(lower) ||
-    /(padho|kya likha hai|likha padho|board padho|yeh padho)/i.test(lower)
+    /(read\s+(?:a\s+|the\s+|this\s+)?(?:book|books|page|novel|document|text|sign|label|board|passage)|reading\s+(?:a\s+)?books?|book\s+reading|start\s+reading|read\s+this|what does it say|can you read|ocr)/i.test(lower) ||
+    /^(read|text|book|books)$/i.test(lower) ||
+    /(ಓದು|oodu|idu oodu|pustaka oodu|baraha oodu|pathisu|enu baredide)/i.test(lower) ||
+    /(padho|kitab padho|pustak padho|kya likha hai|likha padho|board padho|yeh padho)/i.test(lower)
   ) {
+    const isBook = /(book|novel|page|kitab|pustak|pustaka)/i.test(lower);
     return {
       intent: 'READ_TEXT',
-      params: {},
+      params: isBook ? { type: 'book' } : {},
     };
   }
 
-  // 9. NAVIGATE_HELP
+  // 9. NAVIGATE_HELP (including navigation from place to place and destination extraction)
+  const navMatch = lower.match(/(?:navigate\s+to|guide\s+me\s+to|take\s+me\s+to|path\s+to|walk\s+to)\s+(?:the\s+|a\s+)?(.+)/i);
+  if (navMatch) {
+    const destination = navMatch[1].replace(/[?.!]+$/, '').trim();
+    return {
+      intent: 'NAVIGATE_HELP',
+      params: { destination },
+    };
+  }
+
   if (
-    /(navigate|guide me|which way|directions|help me walk|navigation help|lead the way|path to)/i.test(lower) ||
+    /(navigate(\s+from\s+place\s+to\s+place)?|navigation(\s+mode)?|guide me|which way|directions|help me walk|navigation help|lead the way|where should i walk)/i.test(lower) ||
+    /^(navigate|navigation)$/i.test(lower) ||
     /(ದಾರಿ ತೋರಿಸು|dari torisu|margadarshana|elli hogabeku)/i.test(lower) ||
     /(rasta dikhao|kidhar jana hai|guide karo|rasta batao|navigation)/i.test(lower)
   ) {

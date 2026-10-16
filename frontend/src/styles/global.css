@@ -977,5 +977,322 @@ footer.app-footer {
   pointer-events: none;
 }
 
+/* ===== Voice Assistant Hub & Conversational Visuals ===== */
+.voice-assistant-hub {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 640px;
+  margin: 1.5rem auto;
+  padding: 2.5rem 1.75rem;
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--color-border);
+  background: linear-gradient(180deg, rgba(19, 27, 46, 0.95) 0%, rgba(11, 15, 25, 0.98) 100%);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 25px rgba(0, 229, 255, 0.15);
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.voice-assistant-hub.listening {
+  border-color: var(--color-primary);
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.6), 0 0 35px rgba(0, 229, 255, 0.3);
+}
+
+.voice-assistant-hub.speaking {
+  border-color: #a78bfa;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.6), 0 0 35px rgba(167, 139, 250, 0.3);
+}
+
+.voice-assistant-hub.navigating {
+  border-color: #38bdf8;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.6), 0 0 35px rgba(56, 189, 248, 0.35);
+}
+
+.voice-assistant-hub.reading {
+  border-color: #fbbf24;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.6), 0 0 35px rgba(251, 191, 36, 0.35);
+}
+
+/* Pulsing Mic Glow Aura */
+.mic-glow-orb {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.75rem;
+  margin-bottom: 1.25rem;
+  background: radial-gradient(circle, rgba(0, 229, 255, 0.25) 0%, rgba(19, 27, 46, 0.8) 70%);
+  border: 2px solid var(--color-primary);
+  box-shadow: 0 0 25px rgba(0, 229, 255, 0.4);
+  position: relative;
+  transition: all 0.3s ease;
+}
+
+.mic-glow-orb.listening {
+  animation: orbPulse 1.8s infinite ease-in-out;
+  border-color: #00ff88;
+  box-shadow: 0 0 35px rgba(0, 255, 136, 0.5);
+}
+
+.mic-glow-orb.speaking {
+  animation: orbPulse 1.4s infinite ease-in-out;
+  border-color: #a78bfa;
+  box-shadow: 0 0 35px rgba(167, 139, 250, 0.5);
+}
+
+.mic-glow-orb.navigating {
+  border-color: #38bdf8;
+  box-shadow: 0 0 35px rgba(56, 189, 248, 0.5);
+}
+
+.mic-glow-orb.reading {
+  border-color: #fbbf24;
+  box-shadow: 0 0 35px rgba(251, 191, 36, 0.5);
+}
+
+@keyframes orbPulse {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 40px rgba(0, 255, 136, 0.6);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.3);
+  }
+}
+
+/* Mode Badge */
+.voice-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 1.1rem;
+  border-radius: var(--radius-full);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  margin-bottom: 0.75rem;
+  background: rgba(0, 229, 255, 0.12);
+  border: 1px solid var(--color-primary);
+  color: var(--color-primary);
+}
+
+.voice-mode-badge.listening {
+  background: rgba(0, 255, 136, 0.14);
+  border-color: #00ff88;
+  color: #00ff88;
+}
+
+.voice-mode-badge.speaking {
+  background: rgba(167, 139, 250, 0.14);
+  border-color: #a78bfa;
+  color: #c4b5fd;
+}
+
+.voice-mode-badge.navigating {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+.voice-mode-badge.reading {
+  background: rgba(251, 191, 36, 0.14);
+  border-color: #fbbf24;
+  color: #fbbf24;
+}
+
+.voice-prompt-title {
+  font-size: 2rem;
+  font-weight: 800;
+  color: #ffffff;
+  margin-bottom: 0.5rem;
+  line-height: 1.25;
+}
+
+.voice-prompt-hint {
+  font-size: 1.1rem;
+  color: var(--color-text-secondary);
+  max-width: 28rem;
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+}
+
+/* Waveform Canvas */
+.waveform-box {
+  width: 100%;
+  max-width: 480px;
+  height: 60px;
+  margin: 0.5rem auto 1.25rem;
+  background: rgba(11, 15, 25, 0.6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.waveform-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* User Voice Transcript Card */
+.user-transcript-bubble {
+  width: 100%;
+  background: rgba(26, 36, 61, 0.85);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1.25rem;
+  margin-top: 0.75rem;
+  text-align: left;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.transcript-speaker-icon {
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.transcript-content {
+  flex: 1;
+}
+
+.transcript-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--color-primary);
+  margin-bottom: 0.2rem;
+}
+
+.transcript-text {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+/* Navigation Guidance Card */
+.nav-guidance-card {
+  width: 100%;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.15) 0%, rgba(19, 27, 46, 0.95) 100%);
+  border: 2px solid #38bdf8;
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  margin-bottom: var(--spacing-md);
+  box-shadow: 0 0 25px rgba(56, 189, 248, 0.25);
+  text-align: left;
+}
+
+.nav-guidance-card.urgent {
+  background: linear-gradient(135deg, rgba(255, 23, 68, 0.25) 0%, rgba(19, 27, 46, 0.95) 100%);
+  border-color: var(--color-danger);
+  box-shadow: 0 0 30px rgba(255, 23, 68, 0.35);
+}
+
+.nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+
+.nav-destination-pill {
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius-full);
+  background: rgba(56, 189, 248, 0.2);
+  color: #38bdf8;
+}
+
+.nav-direction-arrow {
+  font-size: 2.2rem;
+  font-weight: 900;
+  color: #38bdf8;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.nav-guidance-card.urgent .nav-direction-arrow {
+  color: var(--color-danger);
+}
+
+.nav-advice-text {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1.4;
+  margin-top: 0.4rem;
+}
+
+/* Book Reading Card */
+.book-reading-card {
+  width: 100%;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(19, 27, 46, 0.95) 100%);
+  border: 2px solid #fbbf24;
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  margin-bottom: var(--spacing-md);
+  box-shadow: 0 0 25px rgba(251, 191, 36, 0.25);
+  text-align: left;
+}
+
+.book-reading-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.book-reading-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #fbbf24;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.book-text-display {
+  font-size: 1.2rem;
+  line-height: 1.6;
+  color: #ffffff;
+  background: rgba(11, 15, 25, 0.75);
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+  border-left: 4px solid #fbbf24;
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+/* Tap to Interrupt or Talk Notice */
+.tap-to-talk-helper {
+  margin-top: 1.25rem;
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-content: center;
+}
+
+
 
 

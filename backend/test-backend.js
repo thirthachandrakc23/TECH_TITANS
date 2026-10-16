@@ -100,7 +100,9 @@ async function runTests() {
     { text: 'repeat that please', expected: 'REPEAT' },
     { text: 'what are the commands', expected: 'HELP' },
     { text: 'hello there', expected: 'CHAT' },
-    { text: 'find my water bottle', expected: 'FIND_OBJECT', target: 'water bottle' },
+    { text: 'read book', expected: 'READ_TEXT', paramType: 'book' },
+    { text: 'navigate to kitchen', expected: 'NAVIGATE_HELP', destination: 'kitchen' },
+    { text: 'navigate from place to place', expected: 'NAVIGATE_HELP' },
     { text: 'quantum mechanics supercalifragilistic', expected: 'UNKNOWN' },
   ];
 
@@ -110,6 +112,12 @@ async function runTests() {
     assert(res.body.intent === tc.expected, `"${tc.text}" -> ${tc.expected} (got ${res.body.intent})`);
     if (tc.target) {
       assert(res.body.params?.target?.toLowerCase() === tc.target.toLowerCase(), `Target extracted: "${tc.target}" (got "${res.body.params?.target}")`);
+    }
+    if (tc.paramType) {
+      assert(res.body.params?.type === tc.paramType, `Type extracted: "${tc.paramType}" (got "${res.body.params?.type}")`);
+    }
+    if (tc.destination) {
+      assert(res.body.params?.destination?.toLowerCase() === tc.destination.toLowerCase(), `Destination extracted: "${tc.destination}" (got "${res.body.params?.destination}")`);
     }
   }
 
